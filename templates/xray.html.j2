@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>X-Ray: {{ org_alias }}</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1c2024; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
+  h1, h2 { color: #0d1116; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  .meta { color: #57606a; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+  .card { border: 1px solid #d0d7de; border-radius: 6px; padding: 1rem; background: #f6f8fa; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #e2e6ea; }
+  th { background: #eef0f3; font-weight: 600; }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .b-low  { background: #def2d9; color: #1f7a26; }
+  .b-med  { background: #fff3cd; color: #997404; }
+  .b-high { background: #f8d7da; color: #842029; }
+  .b-tier1 { background: #cfe2ff; color: #084298; }
+  .b-tier2 { background: #ffe5d0; color: #84501c; }
+  .b-tier3 { background: #e2d9f3; color: #492370; }
+  .b-excl { background: #e9ecef; color: #495057; }
+  .b-crit { background: #f8d7da; color: #842029; }
+  svg { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; }
+  .legend { font-size: 11px; color: #57606a; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>X-Ray: {{ org_alias }}</h1>
+<p class="meta">Generated {{ generated_at }} · {{ component_count }} components, {{ process_count }} business processes, {{ orphan_resolved }}/{{ orphan_total }} orphans resolved</p>
+
+<h2>Executive Summary</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Component Inventory</h3>
+    <table>
+      <tr><th>Category</th><th>Count</th><th>Coverage</th></tr>
+      {% for row in coverage_by_category %}
+      <tr>
+        <td>{{ row.category }}</td>
+        <td>{{ row.succeeded }} / {{ row.attempted }}</td>
+        <td>{{ "%.0f"|format(row.coverage_ratio * 100) }}%</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <div class="card">
+    <h3>OoE Surface (21 steps)</h3>
+    <table>
+      <tr><th>#</th><th>Step</th><th>Components</th><th>Priority</th></tr>
+      {% for o in ooe_observations %}
+      <tr>
+        <td>{{ o.step }}</td>
+        <td>{{ o.step_name }}</td>
+        <td>{{ o.structural_count }}</td>
+        <td>
+          {% if o.priority == 'critical' %}<span class="badge b-crit">critical</span>
+          {% elif o.priority == 'standard' %}<span class="badge b-med">standard</span>
+          {% else %}<span class="badge b-excl">exclude</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+<h2>Dependency Graph (Force-Directed)</h2>
+<div id="graph"></div>
+<p class="legend">Node size = dependency degree · color = category · drag to reposition · scroll to zoom</p>
+<script>
+const data = {{ graph_json | safe }};
+const width = 1200, height = 600;
+const svg = d3.select("#graph").append("svg").attr("viewBox", `0 0 ${width} ${height}`).attr("width", width).attr("height", height);
+const g = svg.append("g");
+svg.call(d3.zoom().scaleExtent([0.3, 8]).on("zoom", (e) => g.attr("transform", e.transform)));
+const color = d3.scaleOrdinal(d3.schemeTableau10).domain(data.categories);
+const sim = d3.forceSimulation(data.nodes)
+  .force("link", d3.forceLink(data.links).id(d => d.id).distance(80))
+  .force("charge", d3.forceManyBody().strength(-200))
+  .force("center", d3.forceCenter(width/2, height/2));
+const link = g.append("g").attr("stroke", "#999").attr("stroke-opacity", 0.4).selectAll("line").data(data.links).join("line").attr("stroke-width", 1);
+const node = g.append("g").selectAll("circle").data(data.nodes).join("circle")
+  .attr("r", d => 5 + Math.sqrt(d.degree || 1) * 2)
+  .attr("fill", d => color(d.category))
+  .call(d3.drag().on("start", dragS).on("drag", dragD).on("end", dragE));
+node.append("title").text(d => `${d.name} [${d.category}]`);
+sim.on("tick", () => {
+  link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+  node.attr("cx", d => d.x).attr("cy", d => d.y);
+});
+function dragS(e, d){ if(!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; }
+function dragD(e, d){ d.fx=e.x; d.fy=e.y; }
+function dragE(e, d){ if(!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }
+</script>
+
+<h2>Component Heatmap</h2>
+<table>
+  <tr>
+    <th>Component</th><th>Category</th><th>Difficulty</th><th>Risk</th><th>Tier</th><th>Domain</th><th>Summary</th>
+  </tr>
+  {% for row in component_rows %}
+  <tr>
+    <td><b>{{ row.name }}</b></td>
+    <td>{{ row.category }}</td>
+    <td><span class="badge {{ row.diff_class }}">{{ row.translation_difficulty }}</span></td>
+    <td><span class="badge {{ row.risk_class }}">{{ row.migration_risk }}</span></td>
+    <td><span class="badge {{ row.tier_class }}">{{ row.recommended_tier }}</span></td>
+    <td>{{ row.domain }}</td>
+    <td>{{ row.summary }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>Business Processes (Clusters)</h2>
+<table>
+  <tr><th>ID</th><th>Label</th><th>Members</th></tr>
+  {% for p in processes %}
+  <tr><td>{{ p.process_id }}</td><td>{{ p.label }}</td><td>{{ p.size }}</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Orphan Resolution</h2>
+{% if orphan_resolutions %}
+<table>
+  <tr><th>Apex Class</th><th>Channel</th><th>Confidence</th><th>Evidence</th></tr>
+  {% for r in orphan_resolutions %}
+  <tr><td>{{ r.apex_class_name }}</td><td>{{ r.channel }}</td><td>{{ "%.2f"|format(r.confidence) }}</td><td>{{ r.evidence }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No orphans detected.</p>
+{% endif %}
+
+{% if unresolved_orphans %}
+<h3>Unresolved Orphans (likely dead code)</h3>
+<ul>
+  {% for n in unresolved_orphans %}<li>{{ n }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+</body>
+</html>

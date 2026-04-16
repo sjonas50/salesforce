@@ -45,3 +45,7 @@ infra/helm/**/*.tgz
 
 # Misc
 *.log
+
+# Confidential strategic documents — stay local, never pushed to remote.
+Salesforce-OffRamp-Build-Plan*.docx
+*.confidential.*

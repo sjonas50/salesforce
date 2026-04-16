@@ -27,9 +27,16 @@ salesforce = [
 ]
 graph = [
     "falkordb>=1.0",
+    "networkx>=3.3",
+]
+llm = [
+    "anthropic>=0.40",
 ]
 runtime = [
     "temporalio>=1.16",
+]
+report = [
+    "jinja2>=3.1",
 ]
 
 [dependency-groups]
@@ -90,7 +97,13 @@ exclude = ["infra/.*"]
 
 # 3rd-party libs without bundled stubs — relax until each phase introduces them.
 [[tool.mypy.overrides]]
-module = ["simple_salesforce.*", "falkordb.*", "temporalio.*", "structlog.*"]
+module = [
+    "simple_salesforce.*",
+    "falkordb.*",
+    "temporalio.*",
+    "structlog.*",
+    "networkx.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

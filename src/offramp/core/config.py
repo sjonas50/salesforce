@@ -16,7 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class SalesforceSettings(BaseSettings):
     """Per-org Salesforce credentials and API config."""
 
-    model_config = SettingsConfigDict(env_prefix="SF_", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="SF_", env_file=".env", extra="ignore")
 
     org_alias: str = "dev_scratch"
     login_url: str = "https://login.salesforce.com"
@@ -31,7 +31,7 @@ class SalesforceSettings(BaseSettings):
 class InfraSettings(BaseSettings):
     """Infra connections (Postgres, FalkorDB, event bus, Temporal)."""
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     postgres_dsn: str = "postgresql://offramp:offramp@localhost:5432/offramp"
     postgres_shadow_dsn: str = "postgresql://offramp:offramp@localhost:5432/offramp_shadow"
@@ -43,19 +43,26 @@ class InfraSettings(BaseSettings):
 
 
 class LLMSettings(BaseSettings):
-    """LLM endpoint config for annotation + Tier 3 agents."""
+    """LLM endpoint config for annotation + Tier 3 agents.
 
-    model_config = SettingsConfigDict(env_prefix="LLM_", extra="ignore")
+    Defaults to Anthropic Claude Sonnet 4.6. To use a self-hosted Llama or
+    another OpenAI-compatible endpoint, override ``base_url`` + ``model``;
+    the annotation harness routes by ``base_url`` host.
+    """
 
-    base_url: str = "https://llama.example.internal/v1"
+    model_config = SettingsConfigDict(env_prefix="LLM_", env_file=".env", extra="ignore")
+
+    base_url: str = "https://api.anthropic.com"
     api_key: SecretStr = SecretStr("")
-    model: str = "llama-3.1-70b-instruct"
+    model: str = "claude-sonnet-4-6"
+    max_tokens: int = 1024
+    requests_per_minute: int = 50
 
 
 class ProvenanceSettings(BaseSettings):
     """Engram + F44 settings."""
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     engram_api_url: str = "http://localhost:8088"
     f44_network: Literal["base-sepolia", "base-mainnet"] = "base-sepolia"
@@ -64,7 +71,7 @@ class ProvenanceSettings(BaseSettings):
 class ObservabilitySettings(BaseSettings):
     """Logging + Datadog."""
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     datadog_api_key: SecretStr = SecretStr("")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
