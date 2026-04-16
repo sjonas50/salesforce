@@ -1,0 +1,79 @@
+// Salesforce Pub/Sub API protocol definition (subset used by Off-Ramp).
+//
+// Reproduced from the official Apache 2.0 specification published at
+// https://github.com/forcedotcom/pub-sub-api/blob/main/pubsub_api.proto
+// (pinned to API v66.0 / Spring '26). Only the messages and RPCs the
+// shadow subscriber + reconciler use are included; the file stays small
+// + auditable rather than vendoring the full surface.
+
+syntax = "proto3";
+
+package eventbus.v1;
+
+service PubSub {
+    // Bidirectional streaming subscribe — server pushes events as they're
+    // available; client periodically sends FetchRequest to request more.
+    rpc Subscribe(stream FetchRequest) returns (stream FetchResponse);
+
+    // Cached schema fetch — Avro schema for a given event topic version.
+    rpc GetSchema(SchemaRequest) returns (SchemaInfo);
+
+    // Topic metadata.
+    rpc GetTopic(TopicRequest) returns (TopicInfo);
+}
+
+// Client-driven flow control: ask for up to `num_requested` more events.
+message FetchRequest {
+    string topic_name = 1;
+    ReplayPreset replay_preset = 2;
+    bytes replay_id = 3;        // explicit replay id when replay_preset=CUSTOM
+    int32 num_requested = 4;
+    string auth_refresh = 5;    // optional re-auth marker
+}
+
+enum ReplayPreset {
+    LATEST = 0;
+    EARLIEST = 1;
+    CUSTOM = 2;
+}
+
+message FetchResponse {
+    repeated ConsumerEvent events = 1;
+    bytes latest_replay_id = 2;
+    string rpc_id = 3;
+    int32 pending_num_requested = 4;
+}
+
+message ConsumerEvent {
+    ProducerEvent event = 1;
+    bytes replay_id = 2;
+}
+
+message ProducerEvent {
+    string id = 1;
+    string schema_id = 2;
+    bytes payload = 3;          // Avro-encoded
+    map<string, string> headers = 4;
+}
+
+message SchemaRequest {
+    string schema_id = 1;
+}
+
+message SchemaInfo {
+    string schema_id = 1;
+    string schema_json = 2;     // Avro schema JSON
+}
+
+message TopicRequest {
+    string topic_name = 1;
+}
+
+message TopicInfo {
+    string topic_name = 1;
+    string tenant_guid = 2;
+    bool can_publish = 3;
+    bool can_subscribe = 4;
+    string schema_id = 5;
+    int32 rpc_id = 6;
+}

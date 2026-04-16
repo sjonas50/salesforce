@@ -92,12 +92,14 @@ class SimpleSalesforceBackend:
         sf = await self.connect()
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, sf.query_all, soql)
+
     async def create(self, sobject: str, record: dict[str, Any]) -> dict[str, Any]:
         await self._charge_quota()
         sf = await self.connect()
         loop = asyncio.get_running_loop()
         obj = getattr(sf, sobject)
         return await loop.run_in_executor(None, obj.create, record)
+
     async def update(self, sobject: str, record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
         await self._charge_quota()
         sf = await self.connect()
@@ -120,6 +122,7 @@ class SimpleSalesforceBackend:
         loop = asyncio.get_running_loop()
         obj = getattr(sf, sobject)
         return await loop.run_in_executor(None, obj.describe)
+
 
 def _jwt_session_id(settings: SalesforceSettings) -> str:
     """Exchange a JWT bearer assertion for a Salesforce session id.

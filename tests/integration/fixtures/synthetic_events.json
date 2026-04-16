@@ -1,0 +1,12 @@
+[
+    {
+        "entity_name": "Account",
+        "schema_fields": {"Name": "string", "Industry": "string"},
+        "events": [
+            {"op": "create", "record_id": "001A", "fields": {"Name": "Acme", "Industry": "Tech"}},
+            {"op": "update", "record_id": "001A", "fields": {"Industry": "Finance"}},
+            {"op": "create", "record_id": "001B", "fields": {"Name": "Globex"}},
+            {"op": "gap", "record_id": "001A"}
+        ]
+    }
+]

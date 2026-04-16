@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shadow Mode: {{ process_id }}</title>
+<style>
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1c2024; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
+  h1, h2 { color: #0d1116; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  .meta { color: #57606a; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+  .stat { border: 1px solid #d0d7de; border-radius: 6px; padding: .75rem 1rem; background: #f6f8fa; }
+  .stat .label { font-size: 11px; color: #57606a; text-transform: uppercase; letter-spacing: .05em; }
+  .stat .value { font-size: 24px; font-weight: 600; margin-top: 4px; }
+  .stat.ok .value { color: #1f7a26; }
+  .stat.warn .value { color: #997404; }
+  .stat.bad .value { color: #842029; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #e2e6ea; vertical-align: top; }
+  th { background: #eef0f3; font-weight: 600; }
+  .cat { padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .cat-ge { background: #f8d7da; color: #842029; }  /* gap event */
+  .cat-te { background: #ffe4d0; color: #84501c; }  /* translation error */
+  .cat-oo { background: #ffd0d0; color: #842029; }  /* OoE ordering */
+  .cat-go { background: #fff3cd; color: #997404; }  /* governor */
+  .cat-nd { background: #fff3cd; color: #997404; }  /* non-deterministic */
+  .cat-fe { background: #d0e8ff; color: #084298; }  /* formula edge */
+  .cat-ta { background: #e9ecef; color: #495057; }  /* test artifact */
+  pre.diff { background: #fff8d4; padding: .5rem; border-radius: 3px; font-size: 11px; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>Shadow Mode: {{ process_id }}</h1>
+<p class="meta">{{ generated_at }} · window: {{ window_days }} days</p>
+
+<div class="grid">
+  <div class="stat {{ score_class }}">
+    <div class="label">Readiness Score</div>
+    <div class="value">{{ score }}</div>
+  </div>
+  <div class="stat">
+    <div class="label">Total Events</div>
+    <div class="value">{{ total }}</div>
+  </div>
+  <div class="stat {{ diverged_class }}">
+    <div class="label">Divergences</div>
+    <div class="value">{{ diverged }}</div>
+  </div>
+</div>
+
+<p class="meta"><b>Cutover-eligible:</b> {{ "yes" if eligible else "no" }} — {{ reason }}</p>
+
+<h2>Lag</h2>
+<p>{{ lag_status }}</p>
+
+<h2>Recent Divergences</h2>
+{% if divergences %}
+<table>
+  <tr><th>When</th><th>Replay ID</th><th>Diverged</th><th>Category</th><th>Field Diffs</th><th>Anchor</th></tr>
+  {% for d in divergences %}
+  <tr>
+    <td>{{ d.observed_at }}</td>
+    <td><code>{{ d.replay_id[:16] }}</code></td>
+    <td>{{ "yes" if d.diverged else "" }}</td>
+    <td>{% if d.category %}<span class="cat {{ d.cat_class }}">{{ d.category }}</span>{% endif %}</td>
+    <td>{% if d.field_diffs %}<pre class="diff">{{ d.field_diffs_pretty }}</pre>{% endif %}</td>
+    <td>{% if d.anchor_id %}<code>{{ d.anchor_id[:18] }}</code>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No divergence observations yet.</p>
+{% endif %}
+
+</body>
+</html>

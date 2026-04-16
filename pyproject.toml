@@ -38,6 +38,16 @@ runtime = [
 report = [
     "jinja2>=3.1",
 ]
+pubsub = [
+    "grpcio>=1.66",
+    "grpcio-tools>=1.66",
+    "protobuf>=5.27",
+    "fastavro>=1.9",
+]
+shadow = [
+    "asyncpg>=0.29",
+    "sqlalchemy[asyncio]>=2.0",
+]
 
 [dependency-groups]
 dev = [
@@ -61,7 +71,13 @@ packages = ["src/offramp"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
-extend-exclude = ["infra", "docs"]
+# Generated protobuf stubs and infra dirs are excluded from lint/format.
+extend-exclude = [
+    "infra",
+    "docs",
+    "src/offramp/validate/shadow/pubsub_proto/pubsub_api_pb2.py",
+    "src/offramp/validate/shadow/pubsub_proto/pubsub_api_pb2_grpc.py",
+]
 
 [tool.ruff.lint]
 select = [
@@ -93,7 +109,11 @@ warn_redundant_casts = true
 warn_unreachable = true
 disallow_untyped_decorators = true
 files = ["src", "tests"]
-exclude = ["infra/.*"]
+exclude = [
+    "infra/.*",
+    "src/offramp/validate/shadow/pubsub_proto/pubsub_api_pb2.py",
+    "src/offramp/validate/shadow/pubsub_proto/pubsub_api_pb2_grpc.py",
+]
 
 # 3rd-party libs without bundled stubs — relax until each phase introduces them.
 [[tool.mypy.overrides]]
@@ -103,8 +123,23 @@ module = [
     "temporalio.*",
     "structlog.*",
     "networkx.*",
+    "asyncpg.*",
+    "grpc.*",
+    "fastavro.*",
+    "offramp.validate.shadow.pubsub_proto.*",
 ]
 ignore_missing_imports = true
+
+# The pubsub gRPC client uses dynamic attributes from the generated stubs.
+# Runtime works; mypy can't see through generated protobuf modules.
+[[tool.mypy.overrides]]
+module = ["offramp.validate.shadow.pubsub"]
+disable_error_code = [
+    "attr-defined",
+    "name-defined",
+    "type-arg",
+    "no-untyped-call",
+]
 
 # Tests use pytest fixtures + lambdas heavily — relax annotation-required
 # rules for tests/* while keeping strict typing for src/*. Real bugs still
