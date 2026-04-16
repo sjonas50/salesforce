@@ -1,0 +1,22 @@
+[
+    {
+        "cmt_type": "Trigger_Action__mdt",
+        "developer_name": "Lead_Insert_Validation",
+        "fields": {
+            "Apex_Class__c": "LeadValidationHandler",
+            "Order__c": "10",
+            "Object__c": "Lead",
+            "Trigger_Event__c": "BeforeInsert"
+        }
+    },
+    {
+        "cmt_type": "Trigger_Action__mdt",
+        "developer_name": "Lead_Insert_Routing",
+        "fields": {
+            "Apex_Class__c": "LeadRoutingHandler",
+            "Order__c": "20",
+            "Object__c": "Lead",
+            "Trigger_Event__c": "AfterInsert"
+        }
+    }
+]

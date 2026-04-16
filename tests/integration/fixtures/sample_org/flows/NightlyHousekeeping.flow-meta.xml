@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>66.0</apiVersion>
+    <processType>ScheduleTriggeredFlow</processType>
+    <status>Active</status>
+    <start>
+        <schedule>
+            <frequency>Daily</frequency>
+            <startDate>2026-01-01</startDate>
+            <startTime>02:00:00.000Z</startTime>
+        </schedule>
+    </start>
+</Flow>

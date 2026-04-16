@@ -15,6 +15,7 @@ import argparse
 import sys
 
 from offramp import __version__
+from offramp.cli.extract import add_extract_subparser
 from offramp.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -26,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("info", help="Print platform info and exit.")
+    add_extract_subparser(sub)
 
     return parser
 
@@ -33,8 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "info":
-        log.info("offramp.info", version=__version__, status="phase-0-scaffold")
+        log.info("offramp.info", version=__version__, status="phase-1-extract-engine")
         return 0
+    if hasattr(args, "func"):
+        rc = args.func(args)
+        return int(rc) if isinstance(rc, int) else 0
     log.warning("offramp.unknown_command", command=args.command)
     return 2
 

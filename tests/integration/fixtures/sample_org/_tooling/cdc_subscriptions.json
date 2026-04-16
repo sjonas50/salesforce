@@ -1,0 +1,4 @@
+{
+    "subscribed_objects": ["Account", "Lead", "Opportunity"],
+    "channel": "/data/ChangeEvents"
+}

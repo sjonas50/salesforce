@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>66.0</apiVersion>
+    <processType>AutoLaunchedFlow</processType>
+    <status>Active</status>
+    <decisions>
+        <name>RouteByCountry</name>
+        <label>Route By Country</label>
+    </decisions>
+    <recordUpdates>
+        <name>AssignOwner</name>
+    </recordUpdates>
+    <start>
+        <triggerType>RecordAfterSave</triggerType>
+    </start>
+</Flow>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Industry_Required</fullName>
+    <active>true</active>
+    <description>Account industry must be set on creation.</description>
+    <errorConditionFormula>ISBLANK(Industry)</errorConditionFormula>
+    <errorDisplayField>Industry</errorDisplayField>
+    <errorMessage>Industry is required.</errorMessage>
+</ValidationRule>

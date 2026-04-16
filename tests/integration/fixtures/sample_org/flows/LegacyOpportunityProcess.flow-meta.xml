@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>66.0</apiVersion>
+    <processType>Workflow</processType>
+    <status>Active</status>
+    <decisions>
+        <name>StageGate</name>
+    </decisions>
+</Flow>
