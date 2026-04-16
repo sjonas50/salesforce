@@ -1,0 +1,1 @@
+"""Managed Package Adapter generator."""

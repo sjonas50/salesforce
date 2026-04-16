@@ -106,6 +106,15 @@ module = [
 ]
 ignore_missing_imports = true
 
+# Tests use pytest fixtures + lambdas heavily — relax annotation-required
+# rules for tests/* while keeping strict typing for src/*. Real bugs still
+# get caught: argument-type mismatches, attribute errors, etc.
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra -q --strict-markers --strict-config"

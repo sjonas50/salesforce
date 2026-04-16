@@ -16,6 +16,7 @@ import sys
 
 from offramp import __version__
 from offramp.cli.extract import add_extract_subparser
+from offramp.cli.generate import add_generate_subparser
 from offramp.cli.xray import add_xray_subparser
 from offramp.core.logging import get_logger
 
@@ -30,6 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("info", help="Print platform info and exit.")
     add_extract_subparser(sub)
     add_xray_subparser(sub)
+    add_generate_subparser(sub)
 
     return parser
 
