@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Virtualenvs
+.venv/
+venv/
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+secrets/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Generated artifacts (per-org outputs)
+out/
+artifacts/
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate*
+infra/terraform/.terraform.lock.hcl
+
+# Helm
+infra/helm/**/charts/
+infra/helm/**/*.tgz
+
+# Misc
+*.log
