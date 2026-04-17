@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "offramp.componentName" (dict "Release" .Release "component" "mcp") }}
+  labels:
+    {{- include "offramp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp
+spec:
+  replicas: {{ .Values.mcp.replicas }}
+  selector:
+    matchLabels:
+      {{- include "offramp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mcp
+  template:
+    metadata:
+      labels:
+        {{- include "offramp.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mcp
+    spec:
+      containers:
+        - name: mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["uv", "run", "python", "-m", "offramp.mcp.server"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcp.service.port }}
+          env:
+            - name: SF_ORG_ALIAS
+              value: {{ .Values.customer.salesforceOrgAlias | quote }}
+            - name: SF_LOGIN_URL
+              value: {{ .Values.salesforceAuth.loginUrl | quote }}
+            - name: SF_API_VERSION
+              value: {{ .Values.salesforceAuth.apiVersion | quote }}
+            - name: SF_JWT_KEY_PATH
+              value: {{ .Values.salesforceAuth.jwtKeyPath | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.observability.logLevel | quote }}
+            - name: LOG_FORMAT
+              value: {{ .Values.observability.logFormat | quote }}
+          volumeMounts:
+            - name: sf-jwt
+              mountPath: /secrets
+              readOnly: true
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+      volumes:
+        - name: sf-jwt
+          secret:
+            secretName: {{ tpl .Values.salesforceAuth.jwtSecretName . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "offramp.componentName" (dict "Release" .Release "component" "mcp") }}
+  labels:
+    {{- include "offramp.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.mcp.service.type }}
+  ports:
+    - port: {{ .Values.mcp.service.port }}
+      targetPort: http
+  selector:
+    {{- include "offramp.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp

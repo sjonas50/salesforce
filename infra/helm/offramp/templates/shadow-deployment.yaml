@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "offramp.componentName" (dict "Release" .Release "component" "shadow") }}
+  labels:
+    {{- include "offramp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: shadow
+spec:
+  replicas: {{ .Values.shadow.replicas }}
+  selector:
+    matchLabels:
+      {{- include "offramp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: shadow
+  template:
+    metadata:
+      labels:
+        {{- include "offramp.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: shadow
+    spec:
+      containers:
+        - name: shadow
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["uv", "run", "offramp", "shadow", "start", "--process-id", "$(PROCESS_ID)"]
+          env:
+            - name: PROCESS_ID
+              value: "default"
+            - name: SF_PUBSUB_HOST
+              value: "api.pubsub.salesforce.com:7443"
+            - name: SF_CDC_REPLAY_RECONCILE_THRESHOLD_HOURS
+              value: {{ .Values.shadow.cdcReplayReconcileThresholdHours | quote }}
+          resources:
+            {{- toYaml .Values.shadow.resources | nindent 12 }}

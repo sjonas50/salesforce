@@ -1,0 +1,45 @@
+{{- if .Values.networkPolicy.enabled }}
+# Default-deny: pods can only reach what's explicitly allowed below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "offramp.componentName" (dict "Release" .Release "component" "default-deny") }}
+  labels:
+    {{- include "offramp.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# MCP gateway: ingress from cluster traffic; egress to Salesforce REST + Postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "offramp.componentName" (dict "Release" .Release "component" "mcp-policy") }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: mcp
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.mcp.service.port }}
+  egress:
+    # DNS + HTTPS out for the Salesforce REST API.
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 443
+    # Postgres
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}

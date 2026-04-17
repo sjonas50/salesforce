@@ -15,6 +15,7 @@ import argparse
 import sys
 
 from offramp import __version__
+from offramp.cli.cutover import add_cutover_subparser
 from offramp.cli.extract import add_extract_subparser
 from offramp.cli.generate import add_generate_subparser
 from offramp.cli.shadow import add_shadow_subparser
@@ -34,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_xray_subparser(sub)
     add_generate_subparser(sub)
     add_shadow_subparser(sub)
+    add_cutover_subparser(sub)
 
     return parser
 

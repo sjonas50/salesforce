@@ -1,0 +1,97 @@
+# Default values for the Off-Ramp Helm chart.
+# Single-tenant per customer (AD-10) — every install runs in its own namespace.
+
+customer:
+  # Required: the customer alias used to scope namespaces, secrets, and metrics.
+  alias: "fisher"
+  # Required: Salesforce org alias the gateway authenticates against.
+  salesforceOrgAlias: "fisher_prod"
+
+image:
+  repository: ghcr.io/the-attic-ai/offramp
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# === MCP gateway ===
+mcp:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1
+      memory: 2Gi
+  service:
+    type: ClusterIP
+    port: 8080
+  # AD-24 quota allocator polls /limits — interval in seconds.
+  quotaPollIntervalSeconds: 60
+
+# === Shadow Mode subscriber ===
+shadow:
+  # Number of Pub/Sub subscriber processes (partition by object).
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  # AD-21: trigger reconciliation when subscriber lag exceeds this.
+  cdcReplayReconcileThresholdHours: 60
+
+# === Cutover orchestrator (CronJob) ===
+cutoverOrchestrator:
+  # Run advance/rollback evaluation every N minutes.
+  scheduleCron: "*/15 * * * *"
+
+# === Postgres (app + shadow) ===
+postgres:
+  # In dev: deploy a postgres:16 sidecar; in prod customers BYO managed DB.
+  embedded: true
+  appDatabase: offramp
+  shadowDatabase: offramp_shadow
+  externalDsn: ""  # set when embedded=false
+
+# === FalkorDB (Component knowledge graph) ===
+falkordb:
+  embedded: true
+  externalUrl: ""  # set when embedded=false
+
+# === Engram + F44 ===
+engram:
+  apiUrl: "http://engram.svc.cluster.local"
+f44:
+  network: base-mainnet  # or base-sepolia in dev
+
+# === LLM (annotation + Tier 3 agents) ===
+llm:
+  baseUrl: "https://api.anthropic.com"
+  model: "claude-sonnet-4-6"
+  maxTokens: 1024
+  requestsPerMinute: 50
+  # API key sourced from Kubernetes Secret named ${customer.alias}-llm-key.
+  secretName: "{{ .Values.customer.alias }}-llm-key"
+
+# === Salesforce auth (JWT bearer flow) ===
+salesforceAuth:
+  # Mount the PEM-encoded RSA key from this Kubernetes Secret.
+  jwtSecretName: "{{ .Values.customer.alias }}-sf-jwt"
+  jwtKeyPath: "/secrets/sf_jwt.pem"
+  loginUrl: "https://login.salesforce.com"
+  apiVersion: "66.0"
+
+# === Observability ===
+observability:
+  datadog:
+    enabled: true
+    apiKeySecretName: "{{ .Values.customer.alias }}-datadog"
+  logLevel: INFO
+  logFormat: json
+
+# === Network policies ===
+networkPolicy:
+  # Lock down inter-namespace traffic to just what each pod needs.
+  enabled: true

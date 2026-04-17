@@ -1,0 +1,13 @@
+apiVersion: v2
+name: offramp
+description: Salesforce Off-Ramp platform — single-tenant per customer.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - salesforce
+  - offramp
+  - shadow-mode
+  - cutover
+maintainers:
+  - name: The Attic AI, Inc.

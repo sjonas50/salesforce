@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "offramp.componentName" (dict "Release" .Release "component" "cutover") }}
+  labels:
+    {{- include "offramp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cutover-orchestrator
+spec:
+  # Architecture §11.2: orchestrator polls + decides advance / hold / rollback.
+  schedule: {{ .Values.cutoverOrchestrator.scheduleCron | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: cutover
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              # Process ids come from a ConfigMap the engagement team writes.
+              args:
+                - sh
+                - -c
+                - |
+                  for pid in $(cat /etc/offramp/processes.txt); do
+                    uv run offramp cutover advance --process-id "$pid" || true
+                  done
+              volumeMounts:
+                - name: processes
+                  mountPath: /etc/offramp
+          volumes:
+            - name: processes
+              configMap:
+                name: {{ include "offramp.componentName" (dict "Release" .Release "component" "cutover-processes") }}
+                optional: true

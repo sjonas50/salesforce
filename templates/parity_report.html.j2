@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Behavioral Parity Report: {{ report.process_id }}</title>
+<style>
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1c2024; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
+  h1, h2, h3 { color: #0d1116; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  .meta { color: #57606a; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 2rem; }
+  th, td { text-align: left; padding: .5rem; border-bottom: 1px solid #e2e6ea; vertical-align: top; }
+  th { background: #eef0f3; font-weight: 600; }
+  .sev { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .sev-info     { background: #e3f1ff; color: #0a4f7a; }
+  .sev-minor    { background: #fff3cd; color: #997404; }
+  .sev-major    { background: #ffe5d0; color: #84501c; }
+  .sev-blocking { background: #f8d7da; color: #842029; }
+  .disp { font-size: 11px; padding: 2px 6px; border-radius: 3px; }
+  .disp-pending  { background: #f0f0f0; color: #555; }
+  .disp-accepted { background: #def2d9; color: #1f7a26; }
+  .disp-rejected { background: #f8d7da; color: #842029; }
+  code { background: #f6f8fa; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Behavioral Parity Report</h1>
+<p class="meta">
+  Process: <b>{{ report.process_id }}</b> · Org: <b>{{ report.org_alias }}</b><br>
+  Generated: {{ generated_at }} · Findings: {{ report.findings|length }}
+</p>
+
+{% for category, items in by_category.items() %}
+{% if items %}
+<h2>{{ category.value.replace('_', ' ').title() }} ({{ items|length }})</h2>
+<table>
+  <tr>
+    <th>ID</th>
+    <th>Salesforce Behavior</th>
+    <th>Runtime Behavior</th>
+    <th>Rationale</th>
+    <th>Severity</th>
+    <th>Disposition</th>
+    <th>Anchor</th>
+  </tr>
+  {% for f in items %}
+  <tr>
+    <td><code>{{ f.finding_id }}</code></td>
+    <td>{{ f.salesforce_behavior }}</td>
+    <td>{{ f.runtime_behavior }}</td>
+    <td>{{ f.rationale }}</td>
+    <td><span class="sev sev-{{ f.severity }}">{{ f.severity }}</span></td>
+    <td><span class="disp disp-{{ f.customer_disposition }}">{{ f.customer_disposition }}</span></td>
+    <td>{% if f.engram_anchor %}<code>{{ f.engram_anchor[:18] }}</code>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+{% endfor %}
+
+</body>
+</html>
