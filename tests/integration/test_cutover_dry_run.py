@@ -157,9 +157,7 @@ async def test_full_dry_run_progression_with_rollback_and_resume() -> None:
             # Mild divergence (5% dirty at severity 50) -> score ~94, in the
             # ROLLBACK band (>=90, <95).
             await store.reset()
-            await _seed_dirty_window(
-                store, process_id=process_id, n=200, dirty_pct=5, severity=50
-            )
+            await _seed_dirty_window(store, process_id=process_id, n=200, dirty_pct=5, severity=50)
             decision = await orch.evaluate(process_id)
             assert decision.kind is TransitionKind.ROLLBACK, (
                 f"expected ROLLBACK; got {decision.kind} (score {decision.readiness_score})"
@@ -264,9 +262,7 @@ async def test_saga_pause_blocks_rollback_until_confirmed() -> None:
             orch = CutoverOrchestrator(routing=routing, scorer=scorer, provenance=provenance)
             await orch.begin(process_id=process_id)
             # Mild dirty window (5%/sev50) -> ROLLBACK; saga must pause before applying.
-            await _seed_dirty_window(
-                store, process_id=process_id, n=200, dirty_pct=5, severity=50
-            )
+            await _seed_dirty_window(store, process_id=process_id, n=200, dirty_pct=5, severity=50)
 
             saga = SagaTransaction(saga_id="s1")
             saga.record(

@@ -14,8 +14,11 @@ repos:
       - id: check-merge-conflict
       - id: detect-private-key
 
+  # IMPORTANT: keep this rev pinned to the same ruff version as the [dependency-groups]
+  # dev section in pyproject.toml. Different ruff versions produce different
+  # formatter output, which causes CI drift.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+    rev: v0.15.10
     hooks:
       - id: ruff
         args: [--fix]

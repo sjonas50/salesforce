@@ -49,16 +49,26 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history needed for gitleaks to scan all commits.
+          fetch-depth: 0
 
-      - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Use the upstream gitleaks binary action — gitleaks/gitleaks-action@v2
+      # requires a paid license for organizations.
+      - name: Install gitleaks
+        run: |
+          curl -sL https://github.com/gitleaks/gitleaks/releases/download/v8.20.1/gitleaks_8.20.1_linux_x64.tar.gz | tar -xz -C /tmp
+          sudo mv /tmp/gitleaks /usr/local/bin/
+
+      - name: gitleaks scan
+        run: gitleaks detect --source . --no-git --redact --verbose
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
           ignore-unfixed: true
           severity: CRITICAL,HIGH
           exit-code: 1
+          # Skip the venv + generated artifacts dirs.
+          skip-dirs: ".venv,out,artifacts,infra/terraform/.terraform"
