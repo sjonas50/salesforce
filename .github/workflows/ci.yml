@@ -46,6 +46,71 @@ jobs:
       - name: Smoke tests (mocked SF backend in Phase 0)
         run: uv run pytest -m smoke
 
+  integration:
+    name: Integration tests (Postgres + FalkorDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Run alongside the quality job — independent, no dependency chain.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: offramp
+          POSTGRES_PASSWORD: offramp
+          POSTGRES_DB: offramp
+        ports:
+          - 5432:5432
+        # Give Postgres time to initialize before tests try to connect.
+        options: >-
+          --health-cmd "pg_isready -U offramp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      falkordb:
+        image: falkordb/falkordb:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.10.x"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras --group dev
+
+      # The shadow pipeline needs a second database (offramp_shadow).
+      # Service-container env vars only create one, so create the other here.
+      - name: Create shadow database
+        env:
+          PGPASSWORD: offramp
+        run: |
+          until psql -h localhost -U offramp -d offramp -c '\l' >/dev/null 2>&1; do
+            echo "waiting for postgres..."; sleep 2
+          done
+          psql -h localhost -U offramp -d offramp \
+               -c "CREATE DATABASE offramp_shadow;"
+
+      - name: Integration tests
+        env:
+          POSTGRES_DSN: postgresql://offramp:offramp@localhost:5432/offramp
+          POSTGRES_SHADOW_DSN: postgresql://offramp:offramp@localhost:5432/offramp_shadow
+          FALKORDB_URL: redis://localhost:6379
+          # The LLM-annotation e2e self-skips when ANTHROPIC_API_KEY is unset.
+          # CI doesn't have the key, so those tests are skipped by design.
+        run: uv run pytest -m integration -v
+
   security:
     name: Security scans
     runs-on: ubuntu-latest
