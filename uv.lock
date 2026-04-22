@@ -611,7 +611,9 @@ runtime = [
     { name = "temporalio" },
 ]
 salesforce = [
+    { name = "cryptography" },
     { name = "lxml" },
+    { name = "pyjwt" },
     { name = "simple-salesforce" },
 ]
 shadow = [
@@ -635,6 +637,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.40" },
     { name = "anyio", specifier = ">=4.4" },
     { name = "asyncpg", marker = "extra == 'shadow'", specifier = ">=0.29" },
+    { name = "cryptography", marker = "extra == 'salesforce'", specifier = ">=43.0" },
     { name = "falkordb", marker = "extra == 'graph'", specifier = ">=1.0" },
     { name = "fastavro", marker = "extra == 'pubsub'", specifier = ">=1.9" },
     { name = "grpcio", marker = "extra == 'pubsub'", specifier = ">=1.66" },
@@ -646,6 +649,7 @@ requires-dist = [
     { name = "protobuf", marker = "extra == 'pubsub'", specifier = ">=5.27" },
     { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pydantic-settings", specifier = ">=2.3,<3" },
+    { name = "pyjwt", marker = "extra == 'salesforce'", specifier = ">=2.10" },
     { name = "simple-salesforce", marker = "extra == 'salesforce'", specifier = ">=1.12.9" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'shadow'", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.1" },

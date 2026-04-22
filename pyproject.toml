@@ -28,6 +28,9 @@ salesforce = [
     # (XXE in default iterparse / ETCompatXMLParser configs). 6.1.0 is the
     # first fixed version.
     "lxml>=6.1.0",
+    # JWT bearer flow dependencies.
+    "pyjwt>=2.10",
+    "cryptography>=43.0",
 ]
 graph = [
     "falkordb>=1.0",

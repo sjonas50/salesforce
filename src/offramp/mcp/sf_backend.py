@@ -1,27 +1,31 @@
 """Real Salesforce backend for the MCP gateway (simple-salesforce + JWT).
 
-Phase 3 wires the real backend behind the existing :class:`SalesforceBackend`
+Phase 3 wired the real backend behind the :class:`SalesforceBackend`
 Protocol so existing tests against the in-memory backend still pass — the
-gateway picks one or the other at startup.
+gateway picks one or the other at startup. The JWT bearer flow is now
+fully implemented in :mod:`offramp.mcp.jwt_auth`; this module owns the
+backend lifecycle (connect / invalidate / aclose) and the CRUD methods.
 
-The backend integrates with the AD-24 :class:`QuotaAllocator`: every call
-charges against the calling process's budget BEFORE hitting Salesforce, so
-a runaway process is rejected at the gateway, not after consuming org-wide
+Integrates with the AD-24 :class:`QuotaAllocator`: every call charges
+against the calling process's budget BEFORE hitting Salesforce, so a
+runaway process is rejected at the gateway, not after consuming org-wide
 quota.
 
-JWT bearer flow auth lives here so credentials never escape the backend
-module — the gateway calls high-level CRUD methods and never sees the
-private key.
+Credentials never escape this process:
+* Private key PEM is read once by :class:`SessionCache` and held in memory
+* Access tokens are cached with a 55-minute TTL (SF default is 2h)
+* Callers invalidate on 401 via :meth:`invalidate_session`
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from offramp.core.config import SalesforceSettings
 from offramp.core.logging import get_logger
+from offramp.mcp.jwt_auth import JWTAuthError, SessionCache
 from offramp.mcp.quota import QuotaAllocator
 
 log = get_logger(__name__)
@@ -45,43 +49,74 @@ class SimpleSalesforceBackend:
     process_id: str
     quota: QuotaAllocator | None = None
     _client: Any = None  # simple_salesforce.Salesforce, lazy
+    _session_cache: SessionCache | None = None
+    _connect_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def _cache(self) -> SessionCache:
+        if self._session_cache is None:
+            self._session_cache = SessionCache(settings=self.settings)
+        return self._session_cache
 
     async def connect(self) -> Any:
-        """JWT bearer flow → simple_salesforce.Salesforce. Lazy + idempotent."""
-        if self._client is not None:
-            return self._client
-        # Import locally so the module is importable in environments without
-        # the SF SDK installed (e.g. unit tests against in-memory backend).
-        try:
-            # simple-salesforce doesn't ship explicit __all__ exports; mypy
-            # flags Salesforce as not-explicitly-exported. The runtime import
-            # works fine, so suppress the strict-mode flag here.
-            from simple_salesforce import Salesforce  # type: ignore[attr-defined]
-        except ImportError as exc:  # pragma: no cover
-            raise RuntimeError(
-                "simple-salesforce not installed; add the [salesforce] extra"
-            ) from exc
+        """JWT bearer flow → simple_salesforce.Salesforce. Lazy + idempotent.
 
-        # JWT bearer flow assembly is intentionally minimal — the production
-        # cert lifecycle is documented in docs/runbooks/jwt_cert_rotation.md.
-        # Phase 3 ships the surface; the real handshake exercises against a
-        # scratch org once Phase 5 deployment lands.
-        loop = asyncio.get_running_loop()
-        sf = await loop.run_in_executor(
-            None,
-            lambda: Salesforce(
-                instance_url=self.settings.login_url,
-                version=self.settings.api_version,
-                # Real auth wiring happens at deploy time; the JWT-bearer
-                # exchange returns a session_id that simple-salesforce accepts
-                # via the ``session_id=`` constructor kw. Phase 3 leaves the
-                # exchange function as a hook (``_jwt_session_id``) so tests
-                # can monkeypatch it.
-                session_id=_jwt_session_id(self.settings),
-            ),
-        )
-        self._client = sf
-        return sf
+        Concurrent callers are serialized on ``_connect_lock`` so the
+        expensive JWT exchange happens exactly once per backend instance
+        (until invalidated).
+        """
+        cached = self._client
+        if cached is not None:
+            return cached
+        async with self._connect_lock:
+            # Re-check after acquiring the lock — a concurrent caller may
+            # have populated _client while we were waiting. Read via a
+            # fresh local to defeat mypy's cross-branch narrowing.
+            cached = self._client
+            if cached is not None:
+                return cached
+            # Import locally so the module is importable in environments
+            # without the SF SDK installed (unit tests, MCP smoke).
+            try:
+                # simple-salesforce doesn't declare __all__; the runtime
+                # attribute resolves fine but mypy needs a hint.
+                from simple_salesforce import Salesforce  # type: ignore[attr-defined]
+            except ImportError as exc:  # pragma: no cover — install-time only
+                raise RuntimeError(
+                    "simple-salesforce not installed; add the [salesforce] extra"
+                ) from exc
+
+            session = await self._cache().get()
+            loop = asyncio.get_running_loop()
+            try:
+                sf = await loop.run_in_executor(
+                    None,
+                    lambda: Salesforce(
+                        instance_url=session.instance_url,
+                        version=self.settings.api_version,
+                        session_id=session.access_token,
+                    ),
+                )
+            except Exception as exc:
+                raise JWTAuthError(
+                    f"Salesforce client construction failed after JWT exchange: {exc}"
+                ) from exc
+            self._client = sf
+            return sf
+
+    async def invalidate_session(self) -> None:
+        """Drop cached session + client. Next call re-auths via JWT.
+
+        Call this on ``INVALID_SESSION_ID`` (401) from the SF API.
+        """
+        async with self._connect_lock:
+            self._client = None
+            if self._session_cache is not None:
+                await self._session_cache.invalidate()
+
+    async def aclose(self) -> None:
+        """Release httpx pool held by the session cache."""
+        if self._session_cache is not None:
+            await self._session_cache.close()
 
     async def _charge_quota(self) -> None:
         if self.quota is not None:
@@ -124,15 +159,7 @@ class SimpleSalesforceBackend:
         return await loop.run_in_executor(None, obj.describe)
 
 
-def _jwt_session_id(settings: SalesforceSettings) -> str:
-    """Exchange a JWT bearer assertion for a Salesforce session id.
-
-    Phase 5 wires this up against the live ``/services/oauth2/token`` endpoint
-    using the PEM-encoded RSA key at ``settings.jwt_key_path``. Phase 3 keeps
-    this as a clear hook so the real backend can be smoke-tested against a
-    scratch org without a code change to its callers.
-    """
-    raise NotImplementedError(
-        "JWT session exchange lands in Phase 5 alongside the cert-rotation runbook. "
-        "Tests should monkeypatch this function or use InMemorySalesforceBackend."
-    )
+# JWT exchange now lives in offramp.mcp.jwt_auth. The old ``_jwt_session_id``
+# hook was replaced by :class:`SessionCache` which handles signing, exchange,
+# TTL caching, and invalidation-on-401. Callers wanting a one-shot exchange
+# can use ``offramp.mcp.jwt_auth.session_id(settings)``.
