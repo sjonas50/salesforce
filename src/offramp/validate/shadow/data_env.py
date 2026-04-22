@@ -15,6 +15,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from offramp.core.logging import get_logger
+from offramp.core.soql import (
+    InvalidSOQLIdentifier,
+    InvalidSOQLValue,
+    validate_record_id,
+    validate_sobject,
+)
 from offramp.validate.shadow.store import ShadowStore
 
 log = get_logger(__name__)
@@ -99,6 +105,19 @@ def production_read_via_mcp(gateway: Any) -> ReadFn:
         # to enumerate fields. For the shadow path we keep it cheap: query
         # only the most-commonly-needed fields. Real customers configure
         # their own per-object projections at deploy time.
+        # Validate BOTH inputs first — sobject + record_id can come from CDC
+        # event payloads which are an adversarial source.
+        try:
+            sobject = validate_sobject(sobject)
+            record_id = validate_record_id(record_id)
+        except (InvalidSOQLIdentifier, InvalidSOQLValue) as exc:
+            log.warning(
+                "shadow.data_env.invalid_input",
+                sobject=sobject,
+                record_id=record_id,
+                error=str(exc),
+            )
+            return None
         soql = f"SELECT FIELDS(STANDARD) FROM {sobject} WHERE Id='{record_id}'"
         try:
             resp = await gateway.sf_query(soql)
