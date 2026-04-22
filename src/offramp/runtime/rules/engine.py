@@ -72,13 +72,24 @@ class Rule:
                 passed=not failed,
                 error_message=self.error_message_template if failed else None,
             )
-        # computation rule returns the new field value
+        # computation rule:
+        #   fixes_field + scalar -> single field_mutations entry (single-field rule)
+        #   fixes_field=None + dict -> caller returned the full mutations map
+        #       (used by workflow_rule and assignment_rule translators where
+        #       one generated function touches many fields)
         if self.fixes_field is not None and value is not None:
             return RuleResult(
                 rule_id=self.rule_id,
                 kind="computation",
                 passed=True,
                 field_mutations={self.fixes_field: value},
+            )
+        if self.fixes_field is None and isinstance(value, dict) and value:
+            return RuleResult(
+                rule_id=self.rule_id,
+                kind="computation",
+                passed=True,
+                field_mutations=dict(value),
             )
         return RuleResult(rule_id=self.rule_id, kind="noop", passed=True)
 

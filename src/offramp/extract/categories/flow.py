@@ -25,25 +25,95 @@ def _parse_flow_xml(record: ReconciledRecord) -> dict[str, Any]:
     body = parsed.get("Flow", {})
     if not isinstance(body, dict):
         raise ValueError(f"Flow {record.api_name} XML root malformed")
-    decisions = body.get("decisions") or []
-    record_lookups = body.get("recordLookups") or []
-    record_creates = body.get("recordCreates") or []
-    record_updates = body.get("recordUpdates") or []
+    decisions = _as_list(body.get("decisions"))
+    record_lookups = _as_list(body.get("recordLookups"))
+    record_creates = _as_list(body.get("recordCreates"))
+    record_updates = _as_list(body.get("recordUpdates"))
+    action_calls = _as_list(body.get("actionCalls"))
+    subflows = _as_list(body.get("subflows"))
+    screens = _as_list(body.get("screens"))
+    start = body.get("start") if isinstance(body.get("start"), dict) else {}
+
     return {
         "api_version": body.get("apiVersion", "66.0"),
         "process_type": body.get("processType", ""),
-        "trigger_type": (body.get("start") or {}).get("triggerType", "")
-        if isinstance(body.get("start"), dict)
-        else "",
+        "trigger_type": start.get("triggerType", "") if isinstance(start, dict) else "",
+        "object": start.get("object", "") if isinstance(start, dict) else "",
         "status": body.get("status", "Active"),
-        "decisions": decisions if isinstance(decisions, list) else [decisions],
-        "record_lookups": record_lookups if isinstance(record_lookups, list) else [record_lookups],
-        "record_creates": record_creates if isinstance(record_creates, list) else [record_creates],
-        "record_updates": record_updates if isinstance(record_updates, list) else [record_updates],
-        "subflows": body.get("subflows") or [],
-        "screens": body.get("screens") or [],
+        "decisions": decisions,
+        "record_lookups": record_lookups,
+        "record_creates": [
+            _normalize_record_create(rc) for rc in record_creates if isinstance(rc, dict)
+        ],
+        "record_updates": [
+            _normalize_record_update(ru) for ru in record_updates if isinstance(ru, dict)
+        ],
+        "action_calls": [
+            {
+                "name": a.get("name", ""),
+                "action_name": a.get("actionName", ""),
+                "type": a.get("actionType", ""),
+            }
+            for a in action_calls
+            if isinstance(a, dict)
+        ],
+        "subflows": subflows,
+        "screens": screens,
         "raw_root_keys": sorted(body.keys()),
     }
+
+
+def _as_list(v: Any) -> list[Any]:
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return v
+    return [v]
+
+
+def _normalize_record_update(ru: dict[str, Any]) -> dict[str, Any]:
+    """One <recordUpdates> block — normalized field/value assignments."""
+    return {
+        "name": ru.get("name", ""),
+        "input_reference": ru.get("inputReference", ""),
+        "input_assignments": [
+            _normalize_assignment(a)
+            for a in _as_list(ru.get("inputAssignments"))
+            if isinstance(a, dict)
+        ],
+        "filter_logic": ru.get("filterLogic", ""),
+        "filters": _as_list(ru.get("filters")),
+    }
+
+
+def _normalize_record_create(rc: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": rc.get("name", ""),
+        "object": rc.get("object", ""),
+        "input_assignments": [
+            _normalize_assignment(a)
+            for a in _as_list(rc.get("inputAssignments"))
+            if isinstance(a, dict)
+        ],
+    }
+
+
+def _normalize_assignment(a: dict[str, Any]) -> dict[str, Any]:
+    """Flatten <value><stringValue>X</stringValue></value> into one literal."""
+    value = a.get("value")
+    literal: Any = None
+    if isinstance(value, dict):
+        # SF wraps literals as one of: stringValue, numberValue, booleanValue,
+        # dateValue, dateTimeValue, elementReference (formula).
+        for kind in ("stringValue", "numberValue", "booleanValue", "dateValue", "dateTimeValue"):
+            if kind in value:
+                literal = value[kind]
+                break
+        if literal is None:
+            literal = value.get("elementReference")
+    elif value is not None:
+        literal = value
+    return {"field": a.get("field", ""), "value": literal}
 
 
 class _FlowVariantBase(CategoryExtractor):

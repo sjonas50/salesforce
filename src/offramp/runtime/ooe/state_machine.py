@@ -181,6 +181,14 @@ class OoERuntime:
             # Step 9 — AfterTriggers (and any cascades they fire)
             self._step(ctx, OoEStep.AFTER_TRIGGERS, sobject, record)
 
+            # Step 10 — AssignmentRules (Lead + Case routing). Returns an
+            # OwnerId mutation dict on match.
+            self._step(ctx, OoEStep.ASSIGNMENT_RULES, sobject, record)
+
+            # Step 11 — AutoResponseRules. Tier 2 for now; the step exists
+            # so a Tier 1 translator that routes here isn't silently dropped.
+            self._step(ctx, OoEStep.AUTO_RESPONSE_RULES, sobject, record)
+
             # Step 12 — WorkflowRules. If any field-update rule fires, set the
             # re-fire flag.
             self._step(ctx, OoEStep.WORKFLOW_RULES, sobject, record)

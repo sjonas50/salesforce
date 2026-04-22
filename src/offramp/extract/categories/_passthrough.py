@@ -51,18 +51,8 @@ class ApexClassExtractor(_XmlPassthroughExtractor):
 
 
 @register
-class WorkflowRuleExtractor(_XmlPassthroughExtractor):
-    category: ClassVar[CategoryName] = CategoryName.WORKFLOW_RULE
-
-
-@register
 class ApprovalProcessExtractor(_XmlPassthroughExtractor):
     category: ClassVar[CategoryName] = CategoryName.APPROVAL_PROCESS
-
-
-@register
-class AssignmentRuleExtractor(_XmlPassthroughExtractor):
-    category: ClassVar[CategoryName] = CategoryName.ASSIGNMENT_RULE
 
 
 @register

@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from offramp.core.logging import get_logger
-from offramp.core.models import CategoryName, Component, Tier
+from offramp.core.models import Component, Tier
 from offramp.engram.client import EngramClient
 from offramp.generate import tier1, tier2, tier3
 from offramp.generate.adapters.detector import detect as detect_packages
@@ -138,12 +138,10 @@ class GenerateOrchestrator:
         manifest: list[dict[str, str]],
         result: GenerateResult,
     ) -> None:
-        if component.category not in {CategoryName.VALIDATION_RULE, CategoryName.FORMULA_FIELD}:
-            # Tier 1 dispatch matrix points other categories here too, but
-            # the translator currently only handles formulas. Skip cleanly.
-            raise NotImplementedError(
-                f"Tier 1 emitter does not yet handle {component.category.value}"
-            )
+        # The tier1 module's translate() now handles 6 categories (validation,
+        # formula, workflow, assignment, autolaunched_flow, process_builder,
+        # record_triggered_flow). Unsupported categories raise
+        # NotImplementedError and the orchestrator records them as skipped.
         rule = tier1.translate(component)
         path = self.out_dir / "tier1" / f"{rule.function_name}.py"
         path.write_text(rule.code, encoding="utf-8")
