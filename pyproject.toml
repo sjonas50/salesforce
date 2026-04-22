@@ -24,6 +24,10 @@ offramp = "offramp.cli.__main__:main"
 # Loaded lazily as later phases come online.
 salesforce = [
     "simple-salesforce>=1.12.9",
+    # Direct pin to force the transitive lxml (via zeep) past CVE-2026-41066
+    # (XXE in default iterparse / ETCompatXMLParser configs). 6.1.0 is the
+    # first fixed version.
+    "lxml>=6.1.0",
 ]
 graph = [
     "falkordb>=1.0",
