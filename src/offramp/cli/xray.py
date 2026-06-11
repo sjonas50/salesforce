@@ -23,6 +23,7 @@ from offramp.understand.clustering import (
     write_processes_to_graph,
 )
 from offramp.understand.complexity import score_all
+from offramp.understand.flow_graph import load_flows
 from offramp.understand.graph_loader import (
     load_components,
     load_dispatch_edges,
@@ -44,7 +45,7 @@ def add_xray_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     p.add_argument(
         "--graph-name",
         default=None,
-        help="FalkorDB graph name (default = org alias).",
+        help="Knowledge-graph name (default = org alias).",
     )
     p.add_argument(
         "--cluster-resolution",
@@ -91,14 +92,21 @@ async def _run_fixture(args: argparse.Namespace) -> int:
         result = await orch.run()
         log.info("xray.extract_done", components=len(result.components))
 
-        # === Graph load ===
-        handle = open_graph(url=settings.infra.falkordb_url, name=graph_name)
+        # === Graph load (backend per settings.infra.graph_backend; Neo4j default) ===
+        handle = open_graph(name=graph_name, settings=settings)
         load_components(handle, result.components)
         components_by_name = {
             c.api_name: str(c.id) for c in result.components if c.api_name is not None
         }
+        # Map developer name → id too, so Flow CALLS/INVOKES resolve to Apex /
+        # subflow components even when api_name and name differ.
+        components_by_name.update(
+            {c.name: str(c.id) for c in result.components if c.name not in components_by_name}
+        )
         load_dispatch_edges(handle, result.dispatch_edges, components_by_name=components_by_name)
         load_lwc_apex_edges(handle, result.components, components_by_name=components_by_name)
+        # Comprehensive Flow execution graph: elements, connectors, data deps.
+        load_flows(handle, result.components, components_by_name=components_by_name)
 
         # === Clustering ===
         nx_graph = build_networkx_graph(

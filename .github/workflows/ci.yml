@@ -75,6 +75,17 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/testpassword
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p testpassword 'RETURN 1'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v4
 
@@ -107,6 +118,9 @@ jobs:
           POSTGRES_DSN: postgresql://offramp:offramp@localhost:5432/offramp
           POSTGRES_SHADOW_DSN: postgresql://offramp:offramp@localhost:5432/offramp_shadow
           FALKORDB_URL: redis://localhost:6379
+          NEO4J_URI: bolt://localhost:7687
+          NEO4J_USER: neo4j
+          NEO4J_PASSWORD: testpassword
           # The LLM-annotation e2e self-skips when ANTHROPIC_API_KEY is unset.
           # CI doesn't have the key, so those tests are skipped by design.
         run: uv run pytest -m integration -v
