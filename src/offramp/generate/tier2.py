@@ -1,8 +1,14 @@
 """Tier 2 translator — Component → Temporal workflow code.
 
-Handles approval processes, schedule-triggered flows, and after-save flows
-with callouts. Emits Python source that runs against ``temporalio.workflow``
-+ ``temporalio.activity``. The generated code is **runnable** — `python -c
+Flows are translated **structurally** from the comprehensive Flow IR by
+:mod:`offramp.generate.flow_emitter` — the emitted workflow mirrors the Flow's
+real branches, loops, fault paths, DML, and subflow calls (one activity per
+side effect), not a single placeholder step. Approval processes, and categories
+without a Flow IR (Apex, platform events, escalation/auto-response rules), use
+the hand-written templates below.
+
+Emits Python source that runs against ``temporalio.workflow`` +
+``temporalio.activity``. The generated code is **runnable** — `python -c
 "import emitted_module"` succeeds; deploying to a real Temporal worker is a
 separate operational step (Phase 5).
 """
@@ -46,12 +52,31 @@ from temporalio import activity, workflow
 '''
 
 
+# Flow categories the IR emitter handles structurally (control flow, loops,
+# faults, DML, subflows). Routed here whenever the component carries a parsed
+# Flow IR — which is every Flow extracted since the comprehensive parser landed.
+_FLOW_CATEGORIES = frozenset(
+    {
+        CategoryName.RECORD_TRIGGERED_FLOW,
+        CategoryName.AUTOLAUNCHED_FLOW,
+        CategoryName.PROCESS_BUILDER,
+        CategoryName.SCHEDULE_TRIGGERED_FLOW,
+        CategoryName.PLATFORM_EVENT_TRIGGERED_FLOW,
+        CategoryName.FLOW_ORCHESTRATION,
+        CategoryName.SCREEN_FLOW,
+    }
+)
+
+
 def translate(component: Component) -> GeneratedWorkflow:
     """Dispatch by category and emit a runnable Temporal module."""
     if component.category is CategoryName.APPROVAL_PROCESS:
         return _translate_approval(component)
+    # Flows with a parsed IR → structural emission (real branching/loops/DML).
+    if component.category in _FLOW_CATEGORIES and _has_flow_ir(component):
+        return _translate_flow(component)
     if component.category is CategoryName.SCHEDULE_TRIGGERED_FLOW:
-        return _translate_scheduled(component)
+        return _translate_scheduled(component)  # no-IR fallback
     if component.category in {
         CategoryName.AUTO_RESPONSE_RULE,
         CategoryName.ESCALATION_RULE,
@@ -63,6 +88,19 @@ def translate(component: Component) -> GeneratedWorkflow:
     }:
         return _translate_generic_workflow(component)
     raise NotImplementedError(f"Tier 2 translator does not yet handle {component.category.value}")
+
+
+def _has_flow_ir(component: Component) -> bool:
+    return isinstance(component.raw, dict) and isinstance(component.raw.get("flow_ir"), dict)
+
+
+def _translate_flow(component: Component) -> GeneratedWorkflow:
+    # Imported lazily: flow_emitter imports GeneratedWorkflow from this module.
+    from offramp.extract.flow.ir import FlowIR
+    from offramp.generate.flow_emitter import emit_flow_workflow
+
+    ir = FlowIR.model_validate(component.raw["flow_ir"])
+    return emit_flow_workflow(component, ir)
 
 
 def _translate_approval(component: Component) -> GeneratedWorkflow:

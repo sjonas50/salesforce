@@ -19,6 +19,7 @@ from offramp.core.models import Component
 from offramp.generate.tier1 import GeneratedRule
 from offramp.generate.tier1 import translate as translate_tier1
 from offramp.generate.tier2 import GeneratedWorkflow, _translate_generic_workflow
+from offramp.generate.tier2 import translate as translate_tier2
 from offramp.generate.translation_matrix import is_dual_target_candidate
 
 
@@ -44,5 +45,10 @@ def emit(component: Component) -> DualTarget | None:
         rule = translate_tier1(component)
     except (NotImplementedError, ValueError):
         return None
-    workflow = _translate_generic_workflow(component)
+    # Prefer the structural Tier 2 emission (IR-driven for flows); fall back to
+    # the generic single-step wrapper for categories tier2.translate can't model.
+    try:
+        workflow = translate_tier2(component)
+    except (NotImplementedError, ValueError):
+        workflow = _translate_generic_workflow(component)
     return DualTarget(component_id=str(component.id), tier1=rule, tier2=workflow)
