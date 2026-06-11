@@ -15,6 +15,7 @@ from offramp.core.logging import get_logger
 from offramp.engram.client import open_client
 from offramp.extract.orchestrator import ExtractOrchestrator
 from offramp.extract.pull.fixture import FixturePullClient
+from offramp.extract.pull.sf_cli import SfCliError, SfCliPullClient
 
 log = get_logger(__name__)
 
@@ -29,18 +30,22 @@ def add_extract_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParse
     )
     src.add_argument(
         "--org",
-        help="Real Salesforce org alias (Salto/sf CLI/Tooling API; not yet wired).",
+        help="Authenticated Salesforce org alias to retrieve from via the sf CLI.",
     )
     p.add_argument("--out", type=Path, required=True, help="Output directory.")
     p.add_argument("--org-alias", default=None, help="Override org alias label.")
+    p.add_argument(
+        "--sf-binary",
+        default="sf",
+        help="Path to the Salesforce CLI binary (default: sf on PATH).",
+    )
     p.set_defaults(func=_run)
 
 
 def _run(args: argparse.Namespace) -> int:
     if args.fixture is not None:
         return asyncio.run(_run_fixture(args))
-    log.error("extract.real_org_not_wired", org=args.org)
-    return 2
+    return asyncio.run(_run_org(args))
 
 
 async def _run_fixture(args: argparse.Namespace) -> int:
@@ -61,6 +66,27 @@ async def _run_fixture(args: argparse.Namespace) -> int:
     log.info(
         "extract.cli.done",
         out=str(args.out),
+        components=len(result.components),
+        failures=len(result.failures),
+    )
+    return 0
+
+
+async def _run_org(args: argparse.Namespace) -> int:
+    org_alias = args.org_alias or args.org
+    client = SfCliPullClient(org_alias=args.org, sf_binary=args.sf_binary)
+    try:
+        async with open_client() as engram:
+            orch = ExtractOrchestrator(org_alias=org_alias, client=client, engram=engram)
+            result = await orch.run()
+    except SfCliError as exc:
+        log.error("extract.sf_cli.failed", org=args.org, error=str(exc))
+        return 1
+    result.write(args.out)
+    log.info(
+        "extract.cli.done",
+        out=str(args.out),
+        org=args.org,
         components=len(result.components),
         failures=len(result.failures),
     )

@@ -120,12 +120,31 @@ If you see `invalid_grant: user hasn't approved this consumer`:
 If you see `invalid_client_id`:
 - Double-check the `SF_CLIENT_ID` matches the Consumer Key exactly.
 
-## Step 6 — Full pipeline against the real org
+## Step 6 — Authenticate the `sf` CLI (for `offramp extract --org`)
 
-Once Step 5 works, every existing CLI command targets the real org when invoked with `--org` instead of `--fixture`:
+`offramp extract --org` retrieves metadata by shelling out to `sf project retrieve start`, so the **`sf` CLI itself** must be authenticated to the org. This is separate from the `.env` JWT in Step 4 (which the MCP gateway / library path uses). Reuse the *same* keypair and Connected App from Steps 1–3:
 
 ```bash
-# Extract the real org's automation surface
+sf org login jwt \
+    --username "$SF_USERNAME" \
+    --jwt-key-file ~/secrets/offramp/sf_jwt.pem \
+    --client-id "$SF_CLIENT_ID" \
+    --alias offramp-scratch \
+    --instance-url https://login.salesforce.com   # test.salesforce.com for sandboxes
+```
+
+Verify:
+
+```bash
+sf org display --target-org offramp-scratch
+```
+
+## Step 7 — Full pipeline against the real org
+
+Once Steps 5 and 6 work, every CLI command targets the real org with `--org` instead of `--fixture`:
+
+```bash
+# Extract the real org's automation surface (live retrieve via sf CLI)
 uv run offramp extract --org offramp-scratch --out out/real_org
 
 # Render the X-Ray report (uses the same real-backend path)
@@ -135,9 +154,9 @@ uv run offramp xray --org offramp-scratch --out out/real_org/xray
 uv run offramp generate --org offramp-scratch --out artifacts/real_org
 ```
 
-**Note:** the `--org` flag currently still routes to the stubbed real backends (`SaltoPullClient` etc.). Wiring the `FixturePullClient` path to use the live `SimpleSalesforceBackend` is the next follow-up.
+`offramp extract --org` builds a wildcard `package.xml` covering all Metadata-API categories, retrieves them in source format, and runs the same per-category extractors used for fixtures. Change Data Capture is the one category not retrievable this way — it lands via the Tooling API client (next follow-up).
 
-## Step 7 — Cert lifecycle
+## Step 8 — Cert lifecycle
 
 - See [jwt_cert_rotation.md](jwt_cert_rotation.md) for the quarterly rotation workflow.
 - The cert expires on the `-days 365` you set in Step 1. Rotate **before** the expiry.
