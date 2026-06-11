@@ -1,67 +1,92 @@
-"""FalkorDB graph loader (C5).
+"""Knowledge-graph loader (C5) — backend-agnostic (Neo4j default, FalkorDB opt).
 
-Materializes the Phase 1 ``ExtractRunResult`` into a typed FalkorDB graph
-(Cypher-compatible). Subsequent passes (clustering, annotation, X-Ray
-rendering) read from the graph rather than juggling raw lists.
+Materializes the Phase 1 ``ExtractRunResult`` into a typed Cypher graph via the
+pluggable :mod:`offramp.understand.graph_backend`. Subsequent passes
+(clustering, annotation, X-Ray rendering) read from the graph rather than
+juggling raw lists.
 
 Schema::
 
     (:Component {id, category, name, api_name, namespace, content_hash})
     (:BusinessProcess {id, label, size})
-    (:DispatchEdge {dispatcher_cmt, handler_class, confidence})  # auxiliary
+    (:Flow {id, api_name, ...})                      # one per Flow component
+    (:FlowElement {id, name, element_type, ...})     # one per Flow element
+    (:SObject {name}) (:SObjectField {key}) (:FlowResource {key})
 
 Edges::
 
     (:Component)-[:DEPENDS_ON]->(:Component)         # generic deps
     (:Component)-[:DISPATCHES]->(:Component)         # CMT-resolved
-    (:Component)-[:CALLS]->(:Component)              # LWC -> Apex
+    (:Component)-[:CALLS]->(:Component)              # LWC/Flow -> Apex
     (:Component)-[:PARTICIPATES_IN]->(:BusinessProcess)
+    (:FlowElement)-[:CONTROL_FLOW {kind}]->(:FlowElement)   # connectors
+    (:FlowElement)-[:READS|WRITES]->(:SObject|:SObjectField)
+    (:Flow)-[:INVOKES]->(:Component)                 # subflow
+    (:FlowElement)-[:REFERENCES]->(:FlowResource)
 """
 
 from __future__ import annotations
 
-import contextlib
 from dataclasses import dataclass
 from typing import Any
 
-from falkordb import FalkorDB
-from falkordb.graph import Graph as FalkorGraph
-
+from offramp.core.config import get_settings
 from offramp.core.logging import get_logger
 from offramp.core.models import Component
 from offramp.extract.dispatch.class_resolver import DispatchEdge
+from offramp.understand.graph_backend import (
+    FalkorBackend,
+    GraphBackend,
+    Neo4jBackend,
+)
 
 log = get_logger(__name__)
 
 
 @dataclass
 class GraphHandle:
-    """Owned FalkorDB connection + the named graph it works against."""
+    """A connected graph backend + the named graph it works against.
 
-    client: FalkorDB
-    graph: FalkorGraph
+    ``graph`` is the backend; it exposes ``query(cypher, params)`` returning a
+    result with ``.result_set``, plus ``reset()`` / ``delete()`` / ``close()``.
+    """
+
+    graph: GraphBackend
     name: str
 
     def reset(self) -> None:
-        """Drop and re-create the graph — used at the start of each load."""
-        # Graph may not exist yet on first load; suppress the missing-graph case.
-        with contextlib.suppress(Exception):
-            self.graph.delete()
-        self.graph = self.client.select_graph(self.name)
+        """Drop the graph's contents — used at the start of each load."""
+        self.graph.reset()
+
+    def close(self) -> None:
+        self.graph.close()
 
 
-def open_graph(*, url: str, name: str) -> GraphHandle:
-    """Connect to FalkorDB and select a per-org graph."""
-    # FalkorDB python client expects host/port — parse from a redis:// URL.
-    if "://" in url:
-        _, _, hostport = url.partition("://")
+def open_graph(
+    *,
+    name: str,
+    url: str | None = None,
+    backend: str | None = None,
+    settings: Any = None,
+) -> GraphHandle:
+    """Open a per-org knowledge graph on the configured backend.
+
+    Backend resolution order: explicit ``backend`` arg → a ``redis://`` ``url``
+    (implies FalkorDB) → ``settings.infra.graph_backend`` → ``"neo4j"``.
+    """
+    if backend is None:
+        if url and url.startswith(("redis://", "rediss://")):
+            backend = "falkordb"
+        else:
+            settings = settings or get_settings()
+            backend = settings.infra.graph_backend
+
+    if backend == "falkordb":
+        be: GraphBackend = FalkorBackend(url=url or "redis://localhost:6379", name=name)
     else:
-        hostport = url
-    host, _, port_str = hostport.partition(":")
-    port = int(port_str) if port_str else 6379
-    client = FalkorDB(host=host, port=port)
-    graph = client.select_graph(name)
-    return GraphHandle(client=client, graph=graph, name=name)
+        settings = settings or get_settings()
+        be = Neo4jBackend.from_settings(settings.infra, name=name)
+    return GraphHandle(graph=be, name=name)
 
 
 def load_components(handle: GraphHandle, components: list[Component]) -> int:

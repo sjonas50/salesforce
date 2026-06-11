@@ -33,6 +33,7 @@ salesforce = [
     "cryptography>=43.0",
 ]
 graph = [
+    "neo4j>=5.23",
     "falkordb>=1.0",
     "networkx>=3.3",
 ]
@@ -129,6 +130,7 @@ exclude = [
 module = [
     "simple_salesforce.*",
     "falkordb.*",
+    "neo4j.*",
     "temporalio.*",
     "structlog.*",
     "networkx.*",

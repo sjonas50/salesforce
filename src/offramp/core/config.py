@@ -35,7 +35,14 @@ class InfraSettings(BaseSettings):
 
     postgres_dsn: str = "postgresql://offramp:offramp@localhost:5432/offramp"
     postgres_shadow_dsn: str = "postgresql://offramp:offramp@localhost:5432/offramp_shadow"
+    # Knowledge-graph backend. Both speak Cypher; Neo4j is the default product
+    # target, FalkorDB is retained for the Redis-native dev/CI path.
+    graph_backend: Literal["neo4j", "falkordb"] = "neo4j"
     falkordb_url: str = "redis://localhost:6379"
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: SecretStr = SecretStr("neo4j")
+    neo4j_database: str = "neo4j"
     event_bus_backend: Literal["redis_streams", "azure_event_hubs", "nats"] = "redis_streams"
     redis_streams_url: str = "redis://localhost:6379"
     temporal_host: str = "localhost:7233"
