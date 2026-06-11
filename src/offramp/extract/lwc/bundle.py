@@ -19,7 +19,7 @@ from enum import StrEnum
 from typing import Any, ClassVar
 
 from offramp.core.models import CategoryName
-from offramp.extract.categories.base import CategoryExtractor
+from offramp.extract.categories.base import CategoryExtractor, register
 from offramp.extract.pull.reconciler import ReconciledRecord
 
 
@@ -81,6 +81,7 @@ def analyze_js(filename: str, source: str) -> JSAnalysis:
     )
 
 
+@register
 class LWCBundleExtractor(CategoryExtractor):
     """LWC bundle → canonical dict with per-file analyses + bundle classification."""
 

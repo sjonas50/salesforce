@@ -90,10 +90,3 @@ class ChangeDataCaptureExtractor(_XmlPassthroughExtractor):
     """
 
     category: ClassVar[CategoryName] = CategoryName.CHANGE_DATA_CAPTURE
-
-
-# LWC bundles get their own real extractor in extract.lwc — register a tiny
-# adapter here so the dispatch table is complete.
-from offramp.extract.lwc.bundle import LWCBundleExtractor  # noqa: E402
-
-register(LWCBundleExtractor)
