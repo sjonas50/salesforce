@@ -9,7 +9,9 @@ Reverse-engineer a Salesforce org's automation surface, translate each component
 
 ## Status
 
-All six build-plan phases shipped. **163 unit + integration tests** passing, plus **4 load benchmarks**. Real services (no mocks): Salesforce Pub/Sub gRPC, Postgres, FalkorDB, Anthropic Claude Sonnet 4.6.
+All six build-plan phases shipped, plus security hardening + real JWT bearer flow for Salesforce. **270 tests** (225 unit + 18 OoE + 23 integration + 4 load), green on a 3-job CI matrix (Lint+Typecheck+Test, Integration with Postgres + FalkorDB service containers, Security with gitleaks + Trivy CVE scan).
+
+Real services, no mocks: Salesforce Pub/Sub gRPC, Salesforce JWT bearer auth, Postgres, FalkorDB, Anthropic Claude Sonnet 4.6.
 
 | Phase | What | Tests |
 |---|---|---|
@@ -19,6 +21,20 @@ All six build-plan phases shipped. **163 unit + integration tests** passing, plu
 | 3 — OoE Runtime + Translators + MCP | 21-step OoE state machine + SF formula parser + Tier 1/2/3 translators + dual-target generation + managed-package adapters + MCP gateway + AD-24 quota allocator | +52 |
 | 4 — Shadow + Compare Mode | Real Pub/Sub gRPC subscriber + Postgres shadow store + 7-category divergence (incl. AD-22 gap-event) + AD-21 lag/gap reconciliation + readiness scoring + dashboard + compliance export + Compare Mode debug-log replay | +26 |
 | 5 — Cutover Orchestrator | Hash-deterministic per-record router + saga compensation + auto-advance/rollback driven by readiness scores + Engram + F44 anchoring + Behavioral Parity Report + post-cutover monitor + Helm chart + on-prem operator skeleton + 4 production runbooks | +30 + 4 load |
+| Post-launch hardening | SOQL injection defense (46 tests) + 4 new Tier 1 translators (workflow_rule, assignment_rule, autolaunched_flow, process_builder, +12 tests) + lxml CVE-2026-41066 fix + real JWT bearer auth (22 tests) + CI integration matrix (Postgres + FalkorDB service containers) | +80 |
+
+### Currently translates
+
+The Tier 1 translator handles **6 categories** end-to-end with full unit-test coverage:
+
+* `validation_rule` — formula → Python guard
+* `formula_field` — formula → field-populating computation
+* `workflow_rule` — criteria/formula + field-update actions (multi-rule per file)
+* `assignment_rule` — Lead/Case OwnerId routing (first-match-wins)
+* `autolaunched_flow` — simple after-save flows (rejects callouts → Tier 2)
+* `process_builder` — same shape as autolaunched_flow
+
+Against the fixture org, the generator produces `tier1=8 tier2=11 tier3=2 dual_target=2 adapters=0 skipped=4`. The remaining 4 skips are deliberate (callout-bearing flow → Tier 2; rollup_summary needs CDC-reactive recomputation; apex_trigger needs summit-ast; sharing_rule warrants security review).
 
 ## Quickstart
 
@@ -75,7 +91,8 @@ uv run offramp cutover parity-report --process-id demo --org-alias fisher \
 
 ### Runbooks
 
-- [JWT cert rotation](docs/runbooks/jwt_cert_rotation.md) — AD-25
+- **[Connect a real Salesforce scratch org](docs/runbooks/connect_scratch_org.md)** — 7-step walkthrough, ~30 min including SF-side Connected App setup
+- [JWT cert rotation](docs/runbooks/jwt_cert_rotation.md) — AD-25, quarterly rotation cadence
 - [Cutover advance](docs/runbooks/cutover_advance.md) — staged-percentage advance flow
 - [Cutover rollback](docs/runbooks/cutover_rollback.md) — auto + instant
 - [Quota incident](docs/runbooks/quota_incident.md) — AD-24 quota exhaustion
@@ -90,7 +107,7 @@ uv run offramp cutover parity-report --process-id demo --org-alias fisher \
 - **LangGraph** for Tier 3 judgment-required agents (run inside Temporal activities)
 - **Anthropic Claude Sonnet 4.6** for Phase 2 LLM annotation (provider-routable)
 - **simple-salesforce** for REST + Bulk API 2.0; **gRPC + fastavro** for Pub/Sub CDC
-- **FalkorDB** (Cypher) for the Component knowledge graph
+- **Neo4j** (Cypher) for the knowledge graph by default — Component graph **plus** the full Flow execution graph (every element, typed connector, and data dependency). Pluggable backend (`SF_…`/`infra.graph_backend`); **FalkorDB** retained as the Redis-native alternative
 - **Postgres 16** (asyncpg) for app + shadow stores
 - **tree-sitter-javascript** for LWC analysis; **summit-ast** for Apex; **lightning-flow-scanner-core** for Flows
 - **Salto** + **sf CLI** for metadata extraction
@@ -113,9 +130,12 @@ src/offramp/
 └── cli/             offramp CLI entry points
 
 tests/
-├── unit/            136 unit tests (fast, no external services)
-├── integration/     27 integration tests (require Postgres + FalkorDB)
-├── ooe_runtime/     OoE state-machine cases (refire, cascade, mixed-DML, validation)
+├── unit/            225 unit tests (fast, no external services; includes
+│                    SOQL injection defense + JWT auth + 4 Tier 1 translators)
+├── integration/     23 integration tests (Postgres + FalkorDB; CI brings
+│                    these up via service containers)
+├── ooe_runtime/     18 OoE state-machine cases (re-fire, cascade,
+│                    mixed-DML, validation short-circuit; target 200+ per v2.1)
 └── load/            4 throughput + latency benchmarks
 
 infra/
@@ -126,7 +146,27 @@ docs/
 ├── research.md      tech evaluation
 ├── architecture.md  engineering architecture (C1–C18, ADs)
 ├── build-plan.md    phase-gated execution plan
-└── runbooks/        production runbooks (cutover, rollback, quota, reconciliation, JWT rotation)
+└── runbooks/        6 production runbooks — connect scratch org, cutover
+                    advance/rollback, quota incident, replay-id
+                    reconciliation, JWT cert rotation
+```
+
+## Connecting a real Salesforce org
+
+The JWT bearer flow + all four pipeline stages (extract / understand / shadow / cutover) are wired end-to-end against a live Salesforce org. What's still on your side is the Salesforce-UI part: creating a Connected App + authorizing your integration user. See **[docs/runbooks/connect_scratch_org.md](docs/runbooks/connect_scratch_org.md)** for the 7-step walkthrough (~30 min total; most of it is SF Setup clicks that can't be scripted).
+
+Once your `.env` has `SF_CLIENT_ID`, `SF_USERNAME`, and `SF_JWT_KEY_PATH` populated, the one-shot smoke test lives at [`src/offramp/mcp/jwt_auth.py::session_id`](src/offramp/mcp/jwt_auth.py):
+
+```python
+import asyncio
+from offramp.core.config import get_settings
+from offramp.mcp.jwt_auth import session_id
+
+async def main():
+    access, instance = await session_id(get_settings().salesforce)
+    print(f"OK: {instance}")
+
+asyncio.run(main())
 ```
 
 ## Local development
@@ -144,13 +184,15 @@ docker exec offramp-postgres psql -U offramp -d offramp -c "CREATE DATABASE offr
 docker run -d --name offramp-falkordb -p 6379:6379 falkordb/falkordb
 ```
 
+On CI these same services come up automatically as GitHub Actions service containers — the **Integration tests (Postgres + FalkorDB)** job runs 21 tests per push that previously skipped.
+
 For the LLM annotation pass (X-Ray), copy `.env.example` → `.env` and fill in `LLM_API_KEY` + `ANTHROPIC_API_KEY` with your Anthropic API key. `.env` is gitignored.
 
 ```bash
-make test                              # unit tests only
+make test                              # unit tests only (225 + 18 OoE + 1 smoke)
 uv run pytest -m integration           # integration suite (needs Postgres + FalkorDB)
-uv run pytest -m load                  # benchmarks
-uv run pytest                          # everything
+uv run pytest -m load                  # benchmarks (4 targets: MCP p99, rules p99, throughput)
+uv run pytest                          # everything (270 tests; 252 pass + 18 skip w/o docker)
 ```
 
 ## Deployment

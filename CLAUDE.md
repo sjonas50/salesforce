@@ -46,7 +46,7 @@ uv run offramp cutover advance --process <id>
 - **LangGraph** for Tier 3 judgment-required agents (run as Temporal activities for durability)
 - **simple-salesforce 1.12.9** for REST + Bulk API 2.0
 - **Salesforce Pub/Sub API gRPC client** (Avro encoding) for CDC + Platform Events
-- **FalkorDB** (Cypher) for the Component knowledge graph
+- **Neo4j** (Cypher) for the knowledge graph — **default backend** (Component graph + full Flow execution graph: elements, typed connectors, data deps). Pluggable via `InfraSettings.graph_backend`; **FalkorDB** (Cypher) retained as the Redis-native alternative. (Supersedes the v2.1 FalkorDB-only choice; both speak Cypher so the loader's queries are backend-agnostic.)
 - **Postgres 16** for app state + shadow store
 - **tree-sitter-javascript** for LWC analysis; **summit-ast** for Apex parsing; **lightning-flow-scanner-core** for Flows
 - **Salto** (NaCl) + **sf CLI** for metadata extraction
