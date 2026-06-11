@@ -14,6 +14,7 @@ from typing import Any, ClassVar
 from offramp.core.models import CategoryName
 from offramp.extract.categories.base import CategoryExtractor, register
 from offramp.extract.categories.xml_utils import parse_xml
+from offramp.extract.flow.parser import parse_flow_dict
 from offramp.extract.pull.reconciler import ReconciledRecord
 
 
@@ -25,6 +26,13 @@ def _parse_flow_xml(record: ReconciledRecord) -> dict[str, Any]:
     body = parsed.get("Flow", {})
     if not isinstance(body, dict):
         raise ValueError(f"Flow {record.api_name} XML root malformed")
+
+    # Comprehensive reverse-engineering: the full typed IR (every element,
+    # connector, resource, and data dep) is the canonical payload. The flat
+    # summary fields below are kept for back-compat with existing consumers
+    # (translators / X-Ray) until they migrate to reading flow_ir directly.
+    ir = parse_flow_dict(body, api_name=record.api_name)
+
     decisions = _as_list(body.get("decisions"))
     record_lookups = _as_list(body.get("recordLookups"))
     record_creates = _as_list(body.get("recordCreates"))
@@ -60,6 +68,9 @@ def _parse_flow_xml(record: ReconciledRecord) -> dict[str, Any]:
         "subflows": subflows,
         "screens": screens,
         "raw_root_keys": sorted(body.keys()),
+        # Full comprehensive IR — serialized so it round-trips through
+        # Component.raw (JSON) and into the knowledge-graph loader.
+        "flow_ir": ir.model_dump(mode="json"),
     }
 
 

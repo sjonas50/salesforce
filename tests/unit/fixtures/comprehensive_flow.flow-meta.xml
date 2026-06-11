@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>66.0</apiVersion>
+    <label>Opportunity Risk Router</label>
+    <processType>AutoLaunchedFlow</processType>
+    <status>Active</status>
+    <runInMode>SystemModeWithoutSharing</runInMode>
+    <interviewLabel>Opportunity Risk Router {!$Flow.CurrentDateTime}</interviewLabel>
+
+    <start>
+        <locationX>50</locationX>
+        <locationY>0</locationY>
+        <object>Opportunity</object>
+        <recordTriggerType>CreateAndUpdate</recordTriggerType>
+        <triggerType>RecordAfterSave</triggerType>
+        <filterLogic>and</filterLogic>
+        <filters>
+            <field>StageName</field>
+            <operator>EqualTo</operator>
+            <value><stringValue>Closed Won</stringValue></value>
+        </filters>
+        <connector>
+            <targetReference>Get_Account</targetReference>
+        </connector>
+        <scheduledPaths>
+            <name>OneDayAfter</name>
+            <label>1 Day After Close</label>
+            <connector>
+                <targetReference>Notify_Owner</targetReference>
+            </connector>
+            <offsetNumber>1</offsetNumber>
+            <offsetUnit>Days</offsetUnit>
+            <timeSource>CloseDate</timeSource>
+        </scheduledPaths>
+    </start>
+
+    <recordLookups>
+        <name>Get_Account</name>
+        <label>Get Account</label>
+        <locationX>50</locationX>
+        <locationY>120</locationY>
+        <object>Account</object>
+        <filterLogic>and</filterLogic>
+        <filters>
+            <field>Id</field>
+            <operator>EqualTo</operator>
+            <value><elementReference>$Record.AccountId</elementReference></value>
+        </filters>
+        <queriedFields>Id</queriedFields>
+        <queriedFields>AnnualRevenue</queriedFields>
+        <getFirstRecordOnly>true</getFirstRecordOnly>
+        <outputAssignments>
+            <assignToReference>accountRevenue</assignToReference>
+            <field>AnnualRevenue</field>
+        </outputAssignments>
+        <connector>
+            <targetReference>HighValue_Decision</targetReference>
+        </connector>
+        <faultConnector>
+            <targetReference>Log_Error</targetReference>
+        </faultConnector>
+    </recordLookups>
+
+    <decisions>
+        <name>HighValue_Decision</name>
+        <label>High Value?</label>
+        <locationX>50</locationX>
+        <locationY>240</locationY>
+        <defaultConnector>
+            <targetReference>Standard_Path</targetReference>
+        </defaultConnector>
+        <defaultConnectorLabel>Standard</defaultConnectorLabel>
+        <rules>
+            <name>IsHighValue</name>
+            <label>High Value</label>
+            <conditionLogic>and</conditionLogic>
+            <conditions>
+                <leftValueReference>accountRevenue</leftValueReference>
+                <operator>GreaterThan</operator>
+                <rightValue><numberValue>1000000.0</numberValue></rightValue>
+            </conditions>
+            <connector>
+                <targetReference>Loop_Contacts</targetReference>
+            </connector>
+        </rules>
+    </decisions>
+
+    <loops>
+        <name>Loop_Contacts</name>
+        <label>For Each Contact</label>
+        <locationX>200</locationX>
+        <locationY>360</locationY>
+        <collectionReference>relatedContacts</collectionReference>
+        <iterationOrder>Asc</iterationOrder>
+        <nextValueConnector>
+            <targetReference>Assign_Flag</targetReference>
+        </nextValueConnector>
+        <noMoreValuesConnector>
+            <targetReference>Update_Opportunity</targetReference>
+        </noMoreValuesConnector>
+    </loops>
+
+    <assignments>
+        <name>Assign_Flag</name>
+        <label>Assign Flag</label>
+        <locationX>350</locationX>
+        <locationY>360</locationY>
+        <assignmentItems>
+            <assignToReference>Loop_Contacts.Description</assignToReference>
+            <operator>Assign</operator>
+            <value><stringValue>VIP</stringValue></value>
+        </assignmentItems>
+        <connector>
+            <targetReference>Loop_Contacts</targetReference>
+        </connector>
+    </assignments>
+
+    <recordUpdates>
+        <name>Update_Opportunity</name>
+        <label>Update Opportunity</label>
+        <locationX>50</locationX>
+        <locationY>480</locationY>
+        <inputReference>$Record</inputReference>
+        <inputAssignments>
+            <field>Risk_Tier__c</field>
+            <value><stringValue>High</stringValue></value>
+        </inputAssignments>
+        <connector>
+            <targetReference>Call_Scoring_Apex</targetReference>
+        </connector>
+        <faultConnector>
+            <targetReference>Log_Error</targetReference>
+        </faultConnector>
+    </recordUpdates>
+
+    <actionCalls>
+        <name>Call_Scoring_Apex</name>
+        <label>Score Opportunity</label>
+        <locationX>50</locationX>
+        <locationY>600</locationY>
+        <actionName>OpportunityScoringService</actionName>
+        <actionType>apex</actionType>
+        <inputParameters>
+            <name>oppId</name>
+            <value><elementReference>$Record.Id</elementReference></value>
+        </inputParameters>
+        <connector>
+            <targetReference>Run_Subflow</targetReference>
+        </connector>
+        <faultConnector>
+            <targetReference>Log_Error</targetReference>
+        </faultConnector>
+    </actionCalls>
+
+    <subflows>
+        <name>Run_Subflow</name>
+        <label>Sync To ERP</label>
+        <locationX>50</locationX>
+        <locationY>720</locationY>
+        <flowName>ERP_Sync_Subflow</flowName>
+        <inputAssignments>
+            <name>recordId</name>
+            <value><elementReference>$Record.Id</elementReference></value>
+        </inputAssignments>
+        <connector>
+            <targetReference>Create_Task</targetReference>
+        </connector>
+    </subflows>
+
+    <recordCreates>
+        <name>Create_Task</name>
+        <label>Create Follow-up Task</label>
+        <locationX>50</locationX>
+        <locationY>840</locationY>
+        <object>Task</object>
+        <inputAssignments>
+            <field>Subject</field>
+            <value><stringValue>Follow up on high-value opp</stringValue></value>
+        </inputAssignments>
+        <inputAssignments>
+            <field>WhatId</field>
+            <value><elementReference>$Record.Id</elementReference></value>
+        </inputAssignments>
+        <connector>
+            <targetReference>Wait_For_Approval</targetReference>
+        </connector>
+    </recordCreates>
+
+    <waits>
+        <name>Wait_For_Approval</name>
+        <label>Wait For Approval</label>
+        <locationX>50</locationX>
+        <locationY>960</locationY>
+        <waitEvents>
+            <name>ApprovalEvent</name>
+            <connector>
+                <targetReference>Notify_Owner</targetReference>
+            </connector>
+            <conditions>
+                <leftValueReference>$Record.Approved__c</leftValueReference>
+                <operator>EqualTo</operator>
+                <rightValue><booleanValue>true</booleanValue></rightValue>
+            </conditions>
+        </waitEvents>
+        <defaultConnector>
+            <targetReference>Standard_Path</targetReference>
+        </defaultConnector>
+    </waits>
+
+    <actionCalls>
+        <name>Notify_Owner</name>
+        <label>Notify Owner</label>
+        <locationX>50</locationX>
+        <locationY>1080</locationY>
+        <actionName>emailSimple</actionName>
+        <actionType>emailSimple</actionType>
+    </actionCalls>
+
+    <recordDeletes>
+        <name>Standard_Path</name>
+        <label>Cleanup Temp</label>
+        <locationX>250</locationX>
+        <locationY>1080</locationY>
+        <object>Temp_Score__c</object>
+        <filterLogic>and</filterLogic>
+        <filters>
+            <field>Opportunity__c</field>
+            <operator>EqualTo</operator>
+            <value><elementReference>$Record.Id</elementReference></value>
+        </filters>
+    </recordDeletes>
+
+    <actionCalls>
+        <name>Log_Error</name>
+        <label>Log Error</label>
+        <locationX>450</locationX>
+        <locationY>600</locationY>
+        <actionName>ErrorLogger</actionName>
+        <actionType>apex</actionType>
+    </actionCalls>
+
+    <variables>
+        <name>accountRevenue</name>
+        <dataType>Currency</dataType>
+        <isCollection>false</isCollection>
+        <isInput>false</isInput>
+        <isOutput>false</isOutput>
+    </variables>
+    <variables>
+        <name>relatedContacts</name>
+        <dataType>SObject</dataType>
+        <objectType>Contact</objectType>
+        <isCollection>true</isCollection>
+        <isInput>true</isInput>
+        <isOutput>false</isOutput>
+    </variables>
+
+    <formulas>
+        <name>RevenueLabel</name>
+        <dataType>String</dataType>
+        <expression>"Revenue: " &amp; TEXT({!accountRevenue})</expression>
+    </formulas>
+
+    <constants>
+        <name>HIGH_VALUE_THRESHOLD</name>
+        <dataType>Number</dataType>
+    </constants>
+</Flow>
