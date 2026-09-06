@@ -363,6 +363,7 @@ def _references(flow: dict[str, Any]) -> dict[str, list[str]]:
     actions: set[str] = set()
     globals_: set[str] = set()
     platform_events: set[str] = set()
+    components: set[str] = set()  # custom UI components: c:name → name (LWC or Aura)
 
     if host:
         objects.add(host)
@@ -426,6 +427,8 @@ def _references(flow: dict[str, Any]) -> dict[str, list[str]]:
             an = el.get("action_name", "")
             if at == "apex" and an:
                 apex.add(an)
+            elif at == "component" and an.startswith("c:"):
+                components.add(an[2:])
             elif at == "flow" and an:
                 flows.add(an)
             elif at == "emailAlert" and an:
@@ -444,6 +447,9 @@ def _references(flow: dict[str, Any]) -> dict[str, list[str]]:
                 _scan_value(i.get("value"), host, fields, globals_)
         elif kind == "screens":
             for f in el.get("fields", []):
+                ext = f.get("extension", "")
+                if ext.startswith("c:"):
+                    components.add(ext[2:])  # custom screen component
                 of = f.get("object_field", "")
                 if of and "." in of:
                     var, path = of.split(".", 1)
@@ -465,6 +471,7 @@ def _references(flow: dict[str, Any]) -> dict[str, list[str]]:
         "invocable_actions": sorted(actions, key=str.lower),
         "globals": sorted(globals_),
         "platform_events": sorted(platform_events),
+        "lwc_bundles": sorted(components, key=str.lower),
     }
 
 

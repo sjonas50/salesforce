@@ -637,6 +637,9 @@ class _Refs:
 
     class_refs: set[str] = field(default_factory=set)
     method_calls: set[str] = field(default_factory=set)
+    candidate_refs: set[str] = field(
+        default_factory=set
+    )  # lower-case qualifiers: class or variable
     sobjects: set[str] = field(default_factory=set)
     fields: set[str] = field(default_factory=set)
     field_writes: set[str] = field(default_factory=set)
@@ -847,6 +850,11 @@ def _handle_qualified(
         r.class_refs.add(head)
         if is_call:
             r.method_calls.add(f"{head}.{member}")
+    elif is_call and headl not in _KEYWORDS and headl not in _SYSTEM_NAMESPACES:
+        # Apex is case-insensitive: ``customerServices.getCustomerFields()`` may be a
+        # static call on CustomerServices or a method on a variable. Recorded as a
+        # candidate; the graph builder keeps it only if a class by that name exists.
+        r.candidate_refs.add(head)
 
 
 def _is_org_type(typ: str) -> bool:
@@ -957,6 +965,10 @@ def _fold(a: ApexAnalysis, r: _Refs) -> None:
     a.annotations.extend(x for x in r.annotations if x not in a.annotations)
     a.class_references = sorted(class_refs, key=str.lower)
     a.method_calls = sorted(r.method_calls, key=str.lower)
+    a.candidate_class_references = sorted(
+        {c for c in r.candidate_refs if c.lower() not in {x.lower() for x in class_refs}},
+        key=str.lower,
+    )
     a.sobject_references = sorted(r.sobjects, key=str.lower)
     a.field_references = sorted(r.fields, key=str.lower)
     a.field_writes = sorted(r.field_writes, key=str.lower)

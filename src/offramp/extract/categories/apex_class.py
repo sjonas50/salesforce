@@ -26,6 +26,7 @@ def analysis_payload(record: ReconciledRecord, body_key: str) -> dict[str, Any]:
     a = analysis.to_dict() if analysis else {}
     refs: dict[str, Any] = {
         "apex_classes": a.get("class_references", []),
+        "apex_class_candidates": a.get("candidate_class_references", []),
         "objects": a.get("sobject_references", []),
         "fields": a.get("field_references", []),
         "fields_written": a.get("field_writes", []),
@@ -46,6 +47,7 @@ def analysis_payload(record: ReconciledRecord, body_key: str) -> dict[str, Any]:
         "analysis": a,
         "entry_points": a.get("entry_points", []),
         "is_test": bool(a.get("is_test")),
+        "inner_types": a.get("inner_types", []),
         "dynamic_access": a.get("dynamic_access", []),
         "references": refs,
     }

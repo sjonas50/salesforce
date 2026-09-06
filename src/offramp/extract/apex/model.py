@@ -52,6 +52,7 @@ class ApexAnalysis:
     entry_points: list[str] = field(default_factory=list)
     class_references: list[str] = field(default_factory=list)
     method_calls: list[str] = field(default_factory=list)  # 'Qualifier.method'
+    candidate_class_references: list[str] = field(default_factory=list)  # lower-case qualifiers
     sobject_references: list[str] = field(default_factory=list)
     field_references: list[str] = field(default_factory=list)  # 'Object.Field'
     field_writes: list[str] = field(default_factory=list)  # assigned fields ('Lead.OwnerId')

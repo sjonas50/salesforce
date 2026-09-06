@@ -114,8 +114,16 @@ class ToolingApiPullClient:
 
     source_name = "tooling_api"
 
-    def __init__(self, *, gateway: Any, org_alias: str, api_version: str = "66.0") -> None:
+    def __init__(
+        self,
+        *,
+        gateway: Any,
+        org_alias: str,
+        api_version: str = "66.0",
+        skip_categories: set[CategoryName] | None = None,
+    ) -> None:
         self.gateway = gateway  # offramp.mcp.server.MCPGateway
+        self.skip_categories: set[CategoryName] = set(skip_categories or ())
         self.org_alias = org_alias
         self.api_version = api_version
         self.source_version = f"tooling-{api_version}"
@@ -131,6 +139,10 @@ class ToolingApiPullClient:
         self, *, categories: Iterable[CategoryName] | None = None
     ) -> Iterable[RawMetadataRecord]:
         wanted = set(categories) if categories else set(CategoryName)
+        # Surfaces the Metadata API path retrieves in one call each cost this client
+        # one Tooling query *per record* (Metadata is single-record only): ~420 of the
+        # ~600 calls a scan made on a small org. Skip what another path covers.
+        wanted -= self.skip_categories
         out: list[RawMetadataRecord] = []
         if CategoryName.APEX_CLASS in wanted:
             out.extend(await self._apex_classes())
@@ -146,6 +158,8 @@ class ToolingApiPullClient:
             out.extend([r for r in await self._custom_fields() if r.category in wanted])
         if CategoryName.LWC_BUNDLE in wanted:
             out.extend(await self._lwc_bundles())
+        if CategoryName.AURA_BUNDLE in wanted:
+            out.extend(await self._aura_bundles())
         if CategoryName.PLATFORM_EVENT in wanted:
             out.extend(await self._platform_events())
         if CategoryName.CHANGE_DATA_CAPTURE in wanted:
@@ -169,6 +183,13 @@ class ToolingApiPullClient:
             out.extend([r for r in await self._permissions() if r.category in wanted])
         if CategoryName.REPORT in wanted:
             out.extend(await self._reports())
+        for cat, sobject, root in (
+            (CategoryName.CUSTOM_TAB, "CustomTab", "CustomTab"),
+            (CategoryName.CUSTOM_APPLICATION, "CustomApplication", "CustomApplication"),
+            (CategoryName.PATH_ASSISTANT, "PathAssistant", "PathAssistant"),
+        ):
+            if cat in wanted:
+                out.extend(await self._metadata_surface(cat, sobject, root))
         self.stats.records = len(out)
         log.info(
             "extract.tooling.pulled",
@@ -299,12 +320,30 @@ class ToolingApiPullClient:
     async def _custom_object_names(self) -> dict[str, str]:
         """``TableEnumOrId`` holds a CustomObject Id (01I...) for custom objects; map it back."""
         if self._object_names is None:
+            # CustomObject rows cover custom metadata types and platform events too, all
+            # with 01I ids; the suffix comes from EntityDefinition (``%__mdt``/``%__e``
+            # unescaped: ``_`` is a LIKE wildcard, so confirm the suffix client-side).
+            suffix_by_dev: dict[str, str] = {}
+            for like, suffix in (("%__mdt", "__mdt"), ("%__e", "__e")):
+                try:
+                    rows = await self._tq(
+                        "SELECT QualifiedApiName FROM EntityDefinition "
+                        f"WHERE QualifiedApiName LIKE '{like}'"
+                    )
+                except Exception as exc:
+                    log.warning("extract.tooling.entity_suffix_failed", error=str(exc)[:160])
+                    rows = []
+                for r in rows:
+                    qn = str(r.get("QualifiedApiName", ""))
+                    if qn.endswith(suffix):
+                        suffix_by_dev[qn[: -len(suffix)]] = suffix
             names: dict[str, str] = {}
             for r in await self._tq("SELECT Id, DeveloperName, NamespacePrefix FROM CustomObject"):
                 ns = r.get("NamespacePrefix")
                 dev = str(r.get("DeveloperName", ""))
                 if dev:
-                    names[str(r.get("Id"))] = f"{ns}__{dev}__c" if ns else f"{dev}__c"
+                    full_dev = f"{ns}__{dev}" if ns else dev
+                    names[str(r.get("Id"))] = full_dev + suffix_by_dev.get(full_dev, "__c")
             self._object_names = names
         return self._object_names
 
@@ -610,6 +649,48 @@ class ToolingApiPullClient:
             for b in bundles
         ]
 
+    async def _aura_bundles(self) -> list[RawMetadataRecord]:
+        bundles = await self._tq(
+            "SELECT Id, DeveloperName, NamespacePrefix FROM AuraDefinitionBundle"
+        )
+        if not bundles:
+            return []
+        defs = await self._tq("SELECT AuraDefinitionBundleId, DefType, Source FROM AuraDefinition")
+        name_by_id = {str(b.get("Id")): str(b.get("DeveloperName", "")) for b in bundles}
+        suffix = {
+            "COMPONENT": ".cmp",
+            "APPLICATION": ".app",
+            "EVENT": ".evt",
+            "INTERFACE": ".intf",
+            "CONTROLLER": "Controller.js",
+            "HELPER": "Helper.js",
+            "RENDERER": "Renderer.js",
+            "STYLE": ".css",
+            "DOCUMENTATION": ".auradoc",
+            "DESIGN": ".design",
+            "SVG": ".svg",
+            "TOKENS": ".tokens",
+        }
+        files_by_bundle: dict[str, dict[str, str]] = {}
+        for d in defs:
+            bid = str(d.get("AuraDefinitionBundleId", ""))
+            ext = suffix.get(str(d.get("DefType", "")).upper(), ".txt")
+            files_by_bundle.setdefault(bid, {})[name_by_id.get(bid, "") + ext] = str(
+                d.get("Source") or ""
+            )
+        return [
+            self._rec(
+                CategoryName.AURA_BUNDLE,
+                name_by_id[str(b.get("Id"))],
+                {
+                    "path": f"aura/{name_by_id[str(b.get('Id'))]}",
+                    "files": files_by_bundle.get(str(b.get("Id")), {}),
+                },
+                namespace=b.get("NamespacePrefix"),
+            )
+            for b in bundles
+        ]
+
     async def _platform_events(self) -> list[RawMetadataRecord]:
         # Unescaped ``%__e`` also matches e.g. ``OrderShare`` (see cmt_records).
         rows = [
@@ -790,6 +871,35 @@ class ToolingApiPullClient:
                 )
             )
         return out
+
+    async def _metadata_surface(
+        self, cat: CategoryName, sobject: str, root: str
+    ) -> list[RawMetadataRecord]:
+        """Tabs, apps, path assistants: per-record ``Metadata`` (the Metadata API path
+        is cheaper for these; the composite client skips them here)."""
+        try:
+            rows = await self._with_metadata(sobject, "Id, DeveloperName, NamespacePrefix")
+        except Exception as exc:
+            log.warning("extract.tooling.surface_query_failed", type=sobject, error=str(exc)[:200])
+            return []
+        folder = {"CustomTab": "tabs", "CustomApplication": "applications"}.get(
+            sobject, "pathAssistants"
+        )
+        ext = {"CustomTab": "tab", "CustomApplication": "app"}.get(sobject, "pathAssistant")
+        return [
+            self._rec(
+                cat,
+                str(r.get("DeveloperName", "")),
+                {
+                    "path": f"{folder}/{r.get('DeveloperName', '')}.{ext}-meta.xml",
+                    "parsed": {root: r["Metadata"]},
+                    "tooling_id": r.get("Id"),
+                },
+                namespace=r.get("NamespacePrefix"),
+            )
+            for r in rows
+            if r.get("DeveloperName")
+        ]
 
     async def _flexipages(self) -> list[RawMetadataRecord]:
         rows = await self._with_metadata("FlexiPage", "Id, DeveloperName, NamespacePrefix, Type")
@@ -1031,3 +1141,23 @@ def classify_flow(meta: dict[str, Any]) -> CategoryName:
     if pt == "Flow" and meta.get("screens"):
         return CategoryName.SCREEN_FLOW
     return CategoryName.AUTOLAUNCHED_FLOW
+
+
+_SCAN_CALL_ESTIMATE = (
+    250  # Tooling + describe + FieldDefinition + data profile; surfaces via Metadata API
+)
+
+
+def api_budget(limits: Any, needed: int = _SCAN_CALL_ESTIMATE) -> tuple[int | None, bool]:
+    """``(remaining, ok)`` from a ``/limits`` payload; ``(None, True)`` when it says nothing.
+
+    Developer Edition allows 15,000 requests per rolling 24 h and a scan costs a few
+    hundred; twelve scans in one day exhausted an org (pitfall 4). Check before pulling.
+    """
+    if not isinstance(limits, dict):
+        return None, True
+    row = limits.get("DailyApiRequests")
+    if not isinstance(row, dict) or row.get("Remaining") is None:
+        return None, True
+    remaining = int(row["Remaining"])
+    return remaining, remaining >= needed

@@ -27,6 +27,50 @@ class CMTRecord:
     fields: dict[str, str]
 
 
+def read_cmt_records_from_source(roots: list[Path]) -> list[CMTRecord]:
+    """Load CMT rows from source format: ``customMetadata/<Type>.<Record>.md-meta.xml``.
+
+    Each file is one record::
+
+        <CustomMetadata xmlns="http://soap.sforce.com/2006/04/metadata" ...>
+            <label>Contact Customer Fields</label>
+            <values><field>Customer_City__c</field><value xsi:type="xsd:string">MailingCity</value></values>
+
+    ``Customer_Fields.Contact_Customer_Fields.md-meta.xml`` is record
+    ``Contact_Customer_Fields`` of ``Customer_Fields__mdt``.
+    """
+    import xml.etree.ElementTree as ET
+
+    out: list[CMTRecord] = []
+    for root in roots:
+        d = root / "customMetadata"
+        if not d.is_dir():
+            continue
+        for path in sorted(d.glob("*.md-meta.xml")):
+            stem = path.name[: -len(".md-meta.xml")]
+            if "." not in stem:
+                continue
+            type_dev, dev = stem.split(".", 1)
+            try:
+                tree = ET.parse(path)
+            except ET.ParseError:
+                continue
+            fields: dict[str, str] = {}
+            for v in tree.getroot():
+                if not v.tag.endswith("}values"):
+                    continue
+                fname = value = None
+                for child in v:
+                    if child.tag.endswith("}field"):
+                        fname = child.text
+                    elif child.tag.endswith("}value"):
+                        value = child.text
+                if fname:
+                    fields[fname] = value or ""
+            out.append(CMTRecord(cmt_type=f"{type_dev}__mdt", developer_name=dev, fields=fields))
+    return out
+
+
 def read_cmt_records_from_fixture(root: Path) -> list[CMTRecord]:
     """Load CMT rows from ``<root>/_tooling/cmt_records.json``.
 

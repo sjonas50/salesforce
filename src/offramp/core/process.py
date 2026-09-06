@@ -176,6 +176,10 @@ class ProcessDefinition(BaseModel):
     fields_written: list[str] = Field(default_factory=list)
     calls: list[str] = Field(default_factory=list, description="Code, processes, actions invoked")
     fidelity: Fidelity = Fidelity.FULL
+    fidelity_notes: list[str] = Field(
+        default_factory=list,
+        description="Why fidelity is below full: what the model cannot express yet.",
+    )
     active: bool = True
     tags: list[str] = Field(default_factory=list)
     summary: str | None = None

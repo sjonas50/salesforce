@@ -315,3 +315,124 @@ class ReportExtractor(CategoryExtractor):
             "filters": [f for f in filters if f],
             "references": {"objects": [sobject] if sobject else [], "fields": fields},
         }
+
+
+@register
+class CustomTabExtractor(CategoryExtractor):
+    """``tabs/<Name>.tab-meta.xml``: an object tab, a Lightning page tab, a component tab."""
+
+    category: ClassVar[CategoryName] = CategoryName.CUSTOM_TAB
+
+    def parse_payload(self, record: ReconciledRecord) -> dict[str, Any]:
+        body = get_body(record, "CustomTab")
+        objects: list[str] = []
+        if as_bool(body.get("customObject")):
+            objects.append(record.api_name)  # the tab is named after the object
+        flexipage = as_str(body.get("flexiPage"))
+        components = [
+            n for n in (as_str(body.get("lwcComponent")), as_str(body.get("auraComponent"))) if n
+        ]
+        return {
+            "surface": "ui",
+            "label": as_str(body.get("label"), record.api_name),
+            "tab_kind": (
+                "object"
+                if objects
+                else "flexipage"
+                if flexipage
+                else "component"
+                if components
+                else "web"
+            ),
+            "references": {
+                "objects": objects,
+                "flexipages": [flexipage] if flexipage else [],
+                "lwc_bundles": [c.split(":", 1)[-1] for c in components],
+                "visualforce_pages": [as_str(body.get("page"))] if as_str(body.get("page")) else [],
+            },
+        }
+
+
+@register
+class CustomApplicationExtractor(CategoryExtractor):
+    """``applications/<Name>.app-meta.xml``: tabs, record-page overrides, utility bar."""
+
+    category: ClassVar[CategoryName] = CategoryName.CUSTOM_APPLICATION
+
+    def parse_payload(self, record: ReconciledRecord) -> dict[str, Any]:
+        body = get_body(record, "CustomApplication")
+        tabs = [as_str(t) for t in as_list(body.get("tabs")) if as_str(t)]
+        flexipages: set[str] = set()
+        objects: set[str] = set()
+        overrides = []
+        for ov in as_list(body.get("actionOverrides")) + as_list(
+            body.get("profileActionOverrides")
+        ):
+            if not isinstance(ov, dict):
+                continue
+            content = as_str(ov.get("content"))
+            obj = as_str(ov.get("pageOrSobjectType"))
+            if as_str(ov.get("type")).lower() == "flexipage" and content:
+                flexipages.add(content)
+            if obj and obj[0].isupper():
+                objects.add(obj)
+            overrides.append(
+                {
+                    "action": as_str(ov.get("actionName")),
+                    "object": obj,
+                    "content": content,
+                    "type": as_str(ov.get("type")),
+                    "profile": as_str(ov.get("profile")),
+                }
+            )
+        utility = as_str(body.get("utilityBar"))
+        if utility:
+            flexipages.add(utility)
+        # Standard tabs are 'standard-Lead'; custom ones are the tab api name.
+        for t in tabs:
+            if t.startswith("standard-"):
+                objects.add(t[len("standard-") :])
+        return {
+            "surface": "ui",
+            "label": as_str(body.get("label"), record.api_name),
+            "nav_type": as_str(body.get("navType")),
+            "overrides": overrides,
+            "references": {
+                "objects": sorted(objects),
+                "tabs": [t for t in tabs if not t.startswith("standard-")],
+                "flexipages": sorted(flexipages),
+            },
+        }
+
+
+@register
+class PathAssistantExtractor(CategoryExtractor):
+    """``pathAssistants/<Name>.pathAssistant-meta.xml``: the picklist a path is built on."""
+
+    category: ClassVar[CategoryName] = CategoryName.PATH_ASSISTANT
+
+    def parse_payload(self, record: ReconciledRecord) -> dict[str, Any]:
+        body = get_body(record, "PathAssistant")
+        obj = as_str(body.get("entityName"))
+        field = as_str(body.get("fieldName"))
+        fields: set[str] = set()
+        if obj and field:
+            fields.add(f"{obj}.{field}")
+        steps = []
+        for st in as_list(body.get("pathAssistantSteps")):
+            if not isinstance(st, dict):
+                continue
+            key_fields = [as_str(f) for f in as_list(st.get("fieldNames")) if as_str(f)]
+            fields.update(f"{obj}.{f}" for f in key_fields if obj)
+            steps.append({"value": as_str(st.get("picklistValueName")), "fields": key_fields})
+        rt = as_str(body.get("recordTypeName"))
+        return {
+            "surface": "ui",
+            "object": obj,
+            "label": as_str(body.get("masterLabel"), record.api_name),
+            "active": as_bool(body.get("active")),
+            "picklist_field": f"{obj}.{field}" if obj and field else "",
+            "record_type": "" if rt == "__MASTER__" else rt,
+            "steps": steps,
+            "references": {"objects": [obj] if obj else [], "fields": sorted(fields)},
+        }

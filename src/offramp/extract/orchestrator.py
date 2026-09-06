@@ -25,7 +25,11 @@ from offramp.extract.categories.base import (
 )
 from offramp.extract.dispatch.class_resolver import DispatchEdge
 from offramp.extract.dispatch.class_resolver import resolve as resolve_dispatch
-from offramp.extract.dispatch.cmt_reader import CMTRecord, read_cmt_records_from_fixture
+from offramp.extract.dispatch.cmt_reader import (
+    CMTRecord,
+    read_cmt_records_from_fixture,
+    read_cmt_records_from_source,
+)
 from offramp.extract.dispatch.framework_detectors import (
     FrameworkSignal,
 )
@@ -67,7 +71,8 @@ class ToolingSupplement:
         cron = tree.tooling_json("cron_triggers") or []
         dump = tree.tooling_json("data_profile")
         return cls(
-            cmt_records=read_cmt_records_from_fixture(tree.root),
+            cmt_records=read_cmt_records_from_fixture(tree.root)
+            + read_cmt_records_from_source(tree.roots),
             dependency_rows=[r for r in deps if isinstance(r, dict)],
             cron_rows=[r for r in cron if isinstance(r, dict)],
             schema=from_source_tree(tree, org_alias=org_alias),
@@ -104,9 +109,12 @@ class ExtractOrchestrator:
         raw_records = list(await self.client.pull())
         log.info("extract.pulled", count=len(raw_records))
 
-        attempted: dict[CategoryName, int] = defaultdict(int)
+        # Two pull paths (Tooling + Metadata API) can both return one component; count
+        # distinct names or every dual-sourced category reports ~50% coverage.
+        attempted_names: dict[CategoryName, set[str]] = defaultdict(set)
         for r in raw_records:
-            attempted[r.category] += 1
+            attempted_names[r.category].add(r.api_name)
+        attempted: dict[CategoryName, int] = {k: len(v) for k, v in attempted_names.items()}
 
         recon = reconcile(raw_records)
 
@@ -195,6 +203,7 @@ class ExtractOrchestrator:
             coverage=coverage,
             ooe=ooe_report,
             dispatch_edges=dispatch_edges,
+            cmt_records=list(cmt_records),
             framework_signals=framework_signals,
             schema=self.supplement.schema,
             dependency_rows=list(self.supplement.dependency_rows),
@@ -218,6 +227,7 @@ class ExtractRunResult:
     coverage: CoverageReport | None = None
     ooe: SurfaceAuditReport | None = None
     dispatch_edges: list[DispatchEdge] = field(default_factory=list)
+    cmt_records: list[CMTRecord] = field(default_factory=list)
     framework_signals: list[FrameworkSignal] = field(default_factory=list)
     schema: SchemaSnapshot | None = None
     dependency_rows: list[dict[str, Any]] = field(default_factory=list)
@@ -233,6 +243,7 @@ class ExtractRunResult:
                 components=self.components,
                 schema=self.schema,
                 dispatch_edges=self.dispatch_edges,
+                cmt_records=self.cmt_records,
                 api_rows=self.dependency_rows,
                 cron_rows=self.cron_rows,
                 data_profile=self.data_profile,

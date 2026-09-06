@@ -46,10 +46,22 @@ class JSAnalysis:
 
 _APEX_IMPORT_RE = re.compile(r"""@salesforce/apex/([A-Za-z0-9_]+\.[A-Za-z0-9_]+)""")
 _SCHEMA_IMPORT_RE = re.compile(r"""@salesforce/schema/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_.]+)?)""")
+_MESSAGE_CHANNEL_RE = re.compile(r"""@salesforce/messageChannel/([A-Za-z0-9_]+)""")
 _LABEL_IMPORT_RE = re.compile(r"""@salesforce/label/([A-Za-z0-9_.]+)""")
 _UI_API_FIELDS_RE = re.compile(r"""fields\s*:\s*\[([^\]]*)\]""")
 _HTML_RECORD_FORM_RE = re.compile(r"""object-api-name\s*=\s*["']([A-Za-z0-9_]+)["']""")
 _HTML_FIELD_RE = re.compile(r"""field-name\s*=\s*["']([A-Za-z0-9_]+)["']""")
+# Child components in templates: ``<c-error-panel>`` is the bundle ``errorPanel``.
+# JS-side composition: ``import { reduceErrors } from "c/ldsUtils"``.
+_JS_C_IMPORT_RE = re.compile(r"""from\s+["']c/([A-Za-z0-9_]+)["']""")
+_HTML_CHILD_RE = re.compile(r"""<c-([a-z][a-z0-9]*(?:-[a-z0-9]+)*)[\s>/]""")
+
+
+def _kebab_to_camel(name: str) -> str:
+    head, *rest = name.split("-")
+    return head + "".join(part.capitalize() for part in rest)
+
+
 _WIRE_RE = re.compile(r"@wire\s*\(")
 _IMPERATIVE_APEX_RE = re.compile(r"\b[A-Za-z_]\w*\s*\(\s*\{[^}]*\}\s*\)\s*\.then\b")
 _FETCH_RE = re.compile(r"\bfetch\s*\(")
@@ -136,10 +148,16 @@ class LWCBundleExtractor(CategoryExtractor):
         return {
             "references": {
                 "apex_classes": sorted({imp.split(".", 1)[0] for imp in all_imports}),
+                "lwc_bundles": sorted(
+                    {_kebab_to_camel(m) for m in _HTML_CHILD_RE.findall(html_sources)}
+                    | set(_JS_C_IMPORT_RE.findall(js_sources))
+                ),
                 "apex_methods": all_imports,
                 "objects": objects,
                 "fields": fields,
                 "custom_labels": sorted(set(_LABEL_IMPORT_RE.findall(js_sources))),
+                # Lightning Message Service couples components that never import each other.
+                "message_channels": sorted(set(_MESSAGE_CHANNEL_RE.findall(js_sources))),
             },
             "files": sorted(files.keys()),
             "classification": worst.value,

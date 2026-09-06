@@ -159,3 +159,50 @@ def test_flow_values_from_tooling_json_take_first_non_null_key() -> None:
         "ref": "FindTerritory.Owner__c"
     }
     assert _value({"booleanValue": False}) is False
+
+
+def test_flow_references_custom_screen_components_and_component_actions() -> None:
+    from offramp.extract.categories.flow import _references
+
+    flow = {
+        "object": "Reservation__c",
+        "elements": [
+            {
+                "kind": "screens",
+                "name": "S",
+                "fields": [
+                    {
+                        "name": "f1",
+                        "type": "ComponentInstance",
+                        "extension": "c:reservationHelperForm",
+                        "object_field": "",
+                    },
+                    {
+                        "name": "f2",
+                        "type": "ComponentInstance",
+                        "extension": "flowruntime:slider",
+                        "object_field": "",
+                    },
+                ],
+            },
+            {
+                "kind": "actionCalls",
+                "name": "A",
+                "action_type": "component",
+                "action_name": "c:openRecordAction",
+                "inputs": [],
+            },
+            {
+                "kind": "actionCalls",
+                "name": "B",
+                "action_type": "apex",
+                "action_name": "ReservationManager",
+                "inputs": [],
+            },
+        ],
+        "resources": {},
+        "start": {},
+    }
+    refs = _references(flow)
+    assert refs["lwc_bundles"] == ["openRecordAction", "reservationHelperForm"]
+    assert refs["apex_classes"] == ["ReservationManager"]

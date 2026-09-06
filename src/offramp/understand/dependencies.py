@@ -18,6 +18,7 @@ both directions of disagreement.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ from offramp.core.models import (
     SchemaSnapshot,
 )
 from offramp.extract.dispatch.class_resolver import DispatchEdge
+from offramp.extract.dispatch.cmt_reader import CMTRecord
 
 log = get_logger(__name__)
 
@@ -195,10 +197,19 @@ class DependencyGraph:
         return self.nodes.get(node_id)
 
     def find(self, api_name: str, *, kind: str | None = None) -> GraphNode | None:
+        """Look a node up by API name, then display name.
+
+        Several component categories are named after their object (the sharing
+        rules, workflow and assignment-rule files for ``Reservation__c`` are all
+        called ``Reservation__c``), so with no ``kind`` the data-model node wins.
+        """
         want = api_name.lower()
-        for n in self.nodes.values():
-            if n.api_name.lower() == want and (kind is None or n.kind == kind):
-                return n
+        exact = [n for n in self.nodes.values() if n.api_name.lower() == want]
+        if kind is not None:
+            exact = [n for n in exact if n.kind == kind]
+        if exact:
+            rank = {"object": 0, "field": 1, "record_type": 2}
+            return min(exact, key=lambda n: rank.get(n.kind, 9))
         for n in self.nodes.values():
             if n.name.lower() == want and (kind is None or n.kind == kind):
                 return n
@@ -284,6 +295,7 @@ class _Index:
         self.workflow_by_object: dict[str, str] = {}
         self.platform_events: dict[str, str] = {}
         self.email_alerts: dict[str, str] = {}  # 'Lead.Welcome_Lead_Alert' -> workflow component id
+        self.inner_types: dict[str, str] = {}  # 'customer' -> node id of the class declaring it
 
 
 _FIRES_ON_HOST = {
@@ -310,6 +322,7 @@ def build_graph(
     components: list[Component],
     schema: SchemaSnapshot | None = None,
     dispatch_edges: list[DispatchEdge] | None = None,
+    cmt_records: list[CMTRecord] | None = None,
     api_rows: list[dict[str, Any]] | None = None,
     cron_rows: list[dict[str, Any]] | None = None,
     data_profile: DataProfile | None = None,
@@ -321,6 +334,8 @@ def build_graph(
         b.add_schema(schema)
     if data_profile is not None:
         b.add_data_profile(data_profile)
+    if cmt_records:
+        b.add_cmt_records(cmt_records, components)
     for c in components:
         b.add_component_edges(c)
     b.add_dispatch_edges(components, dispatch_edges or [])
@@ -364,6 +379,9 @@ class _Builder:
             key = (c.api_name or c.name).lower()
             if c.category is CategoryName.APEX_CLASS:
                 self.idx.apex[key] = n.id
+                raw_c = c.raw if isinstance(c.raw, dict) else {}
+                for inner in raw_c.get("inner_types", []) or []:
+                    self.idx.inner_types.setdefault(str(inner).lower(), n.id)
             elif c.category in _FLOW_CATEGORIES:
                 self.idx.flows[key] = n.id
             elif c.category is CategoryName.WORKFLOW_RULE and obj:
@@ -494,6 +512,74 @@ class _Builder:
         self.idx.field_nodes[qualified.lower()] = sn
         return nid
 
+    def add_cmt_records(self, records: list[CMTRecord], components: list[Component]) -> None:
+        """Custom metadata rows are configuration: a ``Customer_Fields__mdt`` row says
+        which Contact fields the customer form shows, a ``Trigger_Action__mdt`` row says
+        which handler runs. Each row becomes a node linked to its type, to every field
+        or class its values name, and from every Apex class that reads the type — so a
+        where-used on ``Contact.MailingCity`` reaches ``CustomerServices`` through the row.
+        """
+        readers: dict[str, list[str]] = {}
+        for c in components:
+            raw = c.raw if isinstance(c.raw, dict) else {}
+            refs = raw.get("references", {}) if isinstance(raw.get("references"), dict) else {}
+            for obj in refs.get("objects", []):
+                if str(obj).endswith("__mdt"):
+                    readers.setdefault(str(obj).lower(), []).append(str(c.id))
+        for r in records:
+            api = f"{r.cmt_type}.{r.developer_name}"
+            nid = _external_id("cmt_record", api)
+            self.g.add_node(
+                GraphNode(
+                    id=nid,
+                    kind="cmt_record",
+                    category="custom_metadata_record",
+                    name=r.developer_name,
+                    api_name=api,
+                    object_name=r.cmt_type,
+                    meta={"fields": dict(r.fields)},
+                )
+            )
+            ev = EvidenceChannel.CMT_RECORD
+            self.g.add_edge(
+                nid,
+                self.obj_node(r.cmt_type),
+                DependencyKind.REFERENCES,
+                evidence=ev,
+                notes="row of",
+            )
+            # Values that name objects give the other values an object to resolve against.
+            hosts = [v for v in r.fields.values() if v and v.lower() in self.idx.objects]
+            for fname, value in r.fields.items():
+                if not value or len(value) > 120:
+                    continue
+                if "." in value and (fid := self.field_node(value)):
+                    self.g.add_edge(nid, fid, DependencyKind.REFERENCES, evidence=ev, notes=fname)
+                    continue
+                if (tid := self.idx.apex.get(value.lower())) is not None:
+                    self.g.add_edge(nid, tid, DependencyKind.CALLS, evidence=ev, notes=fname)
+                    continue
+                for host in hosts:
+                    fid = self.field_node(f"{host}.{value}")
+                    if fid is None and _IDENTIFIER_RE.match(value) and not value.endswith("__c"):
+                        # A standard field the schema snapshot did not list (source trees
+                        # carry custom fields only): infer it, as Apex references do.
+                        fid = self.inferred_field(host, value)
+                    if fid:
+                        self.g.add_edge(
+                            nid, fid, DependencyKind.REFERENCES, evidence=ev, notes=fname
+                        )
+                        break
+            for reader in readers.get(r.cmt_type.lower(), []):
+                self.g.add_edge(
+                    reader,
+                    nid,
+                    DependencyKind.REFERENCES,
+                    evidence=ev,
+                    confidence=0.8,
+                    notes="reads configuration",
+                )
+
     def external(self, kind: str, name: str) -> str:
         nid = _external_id(kind, name)
         self.g.add_node(
@@ -527,6 +613,7 @@ class _Builder:
             self.g.add_edge(src, fid, DependencyKind.OWNS, evidence=ev, notes="defines")
         self._apex_edges(c, refs, src, ev)
         self._flow_edges(c, refs, src, ev)
+        self._surface_edges(refs, src, ev)
         self._action_edges(c, refs, src, ev, host)
         self._global_edges(refs, src, ev)
         if c.category is CategoryName.PLATFORM_EVENT and host:
@@ -618,17 +705,75 @@ class _Builder:
                 continue
             if ev is EvidenceChannel.APEX_PARSE and not _looks_like_class(cls):
                 continue
+            if "." in cls and (tid := self.idx.apex.get(cls.split(".", 1)[0].lower())):
+                # Outer.Inner: the inner class lives in the outer class's body.
+                self.g.add_edge(src, tid, DependencyKind.CALLS, evidence=ev, confidence=0.8)
+                continue
+            if cls.split(".", 1)[0] in _PLATFORM_TYPES:
+                continue  # System / Schema / Database namespace types are not org code
+            if tid := self.idx.inner_types.get(cls.lower()):
+                # An inner class named without its outer class (``Customer`` for
+                # ``CustomerServices.Customer``): the dependency is on the declaring class.
+                if tid != src:
+                    self.g.add_edge(
+                        src,
+                        tid,
+                        DependencyKind.CALLS,
+                        evidence=ev,
+                        confidence=0.8,
+                        notes="inner type",
+                    )
+                continue
             self.g.unresolved.append(UnresolvedReference(src, c.name, "apex_class", cls, ev))
         for cls in refs.get("async_targets", []) + refs.get("type_forname", []):
             tid = self.idx.apex.get(cls.lower())
             if tid:
                 self.g.add_edge(src, tid, DependencyKind.CALLS, evidence=ev, notes="async/dynamic")
-        for lwc in refs.get("lwc_bundles", []):
-            tid = self.idx.components.get(("lwc_bundle", lwc.lower()))
+        for cls in refs.get("apex_class_candidates", []):
+            # Case-insensitive qualifier that names a real class (Apex allows it);
+            # silently a variable otherwise.
+            tid = self.idx.apex.get(cls.lower())
             if tid:
+                self.g.add_edge(
+                    src,
+                    tid,
+                    DependencyKind.CALLS,
+                    evidence=ev,
+                    confidence=0.8,
+                    notes="case-insensitive qualifier",
+                )
+        for lwc in refs.get("lwc_bundles", []):
+            # ``c:name`` is an LWC or an Aura bundle; markup does not say which.
+            tid = self.idx.components.get(("lwc_bundle", lwc.lower())) or self.idx.components.get(
+                ("aura_bundle", lwc.lower())
+            )
+            if tid and tid != src:
                 self.g.add_edge(
                     src, tid, DependencyKind.CALLS, evidence=ev, notes="embedded component"
                 )
+        for ch in refs.get("message_channels", []):
+            # Publish/subscribe over a Lightning message channel: every bundle on the
+            # channel is coupled to every other one through this node.
+            self.g.add_edge(
+                src,
+                self.external("LightningMessageChannel", ch),
+                DependencyKind.REFERENCES,
+                evidence=ev,
+                notes="message channel",
+            )
+
+    def _surface_edges(self, refs: dict[str, Any], src: str, ev: EvidenceChannel) -> None:
+        """Tabs open pages; apps list tabs and override record pages."""
+        for fp in refs.get("flexipages", []):
+            tid = self.idx.components.get(("flexipage", fp.lower()))
+            if tid:
+                self.g.add_edge(
+                    src, tid, DependencyKind.REFERENCES, evidence=ev, notes="opens page"
+                )
+        for tab in refs.get("tabs", []):
+            tid = self.idx.components.get(("custom_tab", tab.lower()))
+            if tid:
+                self.g.add_edge(src, tid, DependencyKind.REFERENCES, evidence=ev, notes="tab")
 
     def _flow_edges(
         self, c: Component, refs: dict[str, Any], src: str, ev: EvidenceChannel
@@ -646,6 +791,18 @@ class _Builder:
                 )
             else:
                 self.g.unresolved.append(UnresolvedReference(src, c.name, "flow", fl, ev))
+        for comp in refs.get("lwc_bundles", []) if c.category in _FLOW_CATEGORIES else []:
+            # Screen components (``extensionName``) and component actions
+            # (``actionType=component``): an LWC bundle or an Aura bundle.
+            tid = self.idx.components.get(("lwc_bundle", comp.lower())) or self.idx.components.get(
+                ("aura_bundle", comp.lower())
+            )
+            if tid:
+                self.g.add_edge(
+                    src, tid, DependencyKind.CALLS, evidence=ev, notes="screen component"
+                )
+            else:
+                self.g.unresolved.append(UnresolvedReference(src, c.name, "lwc_bundle", comp, ev))
         for pe in refs.get("platform_events", []):
             tid = self.idx.platform_events.get(pe.lower())
             if tid:
@@ -791,6 +948,14 @@ def _evidence_for(cat: CategoryName) -> EvidenceChannel:
         return EvidenceChannel.ROLLUP_XML
     if cat is CategoryName.LWC_BUNDLE:
         return EvidenceChannel.LWC_IMPORT
+    if cat is CategoryName.AURA_BUNDLE:
+        return EvidenceChannel.AURA_MARKUP
+    if cat in {
+        CategoryName.CUSTOM_TAB,
+        CategoryName.CUSTOM_APPLICATION,
+        CategoryName.PATH_ASSISTANT,
+    }:
+        return EvidenceChannel.LAYOUT_XML
     return EvidenceChannel.RULE_XML
 
 
@@ -830,6 +995,122 @@ def _component_active(c: Component) -> bool:
     if isinstance(status, str):
         return status.lower() in {"active", ""}
     return True
+
+
+# Apex platform types that read like class references but are not org code. Only
+# names the tokenizer would otherwise report as unresolved classes belong here.
+_PLATFORM_TYPES = frozenset(
+    {
+        "AccessType",
+        "Security",
+        "SObjectAccessDecision",
+        "Schema",
+        "Database",
+        "System",
+        "Test",
+        "Limits",
+        "Math",
+        "JSON",
+        "JSONParser",
+        "JSONGenerator",
+        "Http",
+        "HttpRequest",
+        "HttpResponse",
+        "Messaging",
+        "Crypto",
+        "EncodingUtil",
+        "PageReference",
+        "ApexPages",
+        "UserInfo",
+        "Datetime",
+        "DateTime",
+        "Date",
+        "Time",
+        "Decimal",
+        "Integer",
+        "Long",
+        "Double",
+        "Boolean",
+        "String",
+        "Id",
+        "Blob",
+        "Map",
+        "List",
+        "Set",
+        "Object",
+        "SObject",
+        "SObjectType",
+        "SObjectField",
+        "DescribeSObjectResult",
+        "DescribeFieldResult",
+        "Exception",
+        "DmlException",
+        "QueryException",
+        "AuraHandledException",
+        "CalloutException",
+        "NullPointerException",
+        "TypeException",
+        "Type",
+        "Pattern",
+        "Matcher",
+        "URL",
+        "Url",
+        "Site",
+        "Network",
+        "Auth",
+        "Flow",
+        "Process",
+        "Approval",
+        "ConnectApi",
+        "Cache",
+        "Label",
+        "Trigger",
+        "Savepoint",
+        "QueueableContext",
+        "BatchableContext",
+        "SchedulableContext",
+        "FinalizerContext",
+        "Iterator",
+        "Iterable",
+        "Comparable",
+        "InstallHandler",
+        "InstallContext",
+        "UninstallHandler",
+        "LoggingLevel",
+        "Assert",
+        "Formula",
+        "EventBus",
+        "Queueable",
+        "Batchable",
+        "Schedulable",
+        "StaticResource",
+        "SelectOption",
+        "Component",
+        "Reports",
+        "Dom",
+        "XmlStreamReader",
+        "XmlStreamWriter",
+        "Search",
+        "Metadata",
+        "Quiddity",
+        "Request",
+        "DataWeave",
+        "Invocable",
+        "InvocableVariable",
+        "InvocableMethod",
+        "AppLauncher",
+        "Canvas",
+        "TxnSecurity",
+        "Wave",
+        "Sfc",
+        "Support",
+        "KbManagement",
+        "QuickAction",
+    }
+)
+
+
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
 def _looks_like_class(name: str) -> bool:
@@ -882,8 +1163,12 @@ def _link_field(
         if sn and sn.reference_to and sn.reference_to[0]:
             cur_obj = sn.reference_to[0]
             continue
-        # Polymorphic or unknown hop: stop here, keep what we have.
-        b.g.unresolved.append(UnresolvedReference(src, c.name, "field", qualified, ev))
+        # Polymorphic or unknown hop: stop here, keep what we have. The edge to the
+        # relationship field itself (e.g. ``Customer_Fields__mdt.Customer_City__c``, a
+        # metadata relationship whose ``__r.QualifiedApiName`` lives on FieldDefinition)
+        # is the real dependency, so this is a partial resolution, not a gap.
+        if sn is None:
+            b.g.unresolved.append(UnresolvedReference(src, c.name, "field", qualified, ev))
         return
 
 
@@ -942,7 +1227,14 @@ def _fold_api_rows(
         if t == "customfield":
             return idx.fields.get(low)
         if t == "customobject":
-            return idx.objects.get(low) or obj_node(name)
+            # The API drops the suffix ("Territory" for Territory__c, "Customer_Fields"
+            # for Customer_Fields__mdt); resolve to a known object before inventing one.
+            # Custom suffixes first: "Territory" means Territory__c even though a
+            # standard Territory object exists.
+            for cand in (low + "__c", low + "__mdt", low + "__e", low + "__b", low + "__x", low):
+                if cand in idx.objects:
+                    return str(idx.objects[cand])
+            return str(obj_node(name))
         if t == "validationrule" and "." in name:
             _, n = name.split(".", 1)
             return idx.components.get(("validation_rule", n.lower()))
@@ -952,12 +1244,30 @@ def _fold_api_rows(
             return idx.workflow_by_object.get(name.split(".", 1)[0].lower())
         if t == "lightningcomponentbundle":
             return idx.components.get(("lwc_bundle", low))
-        if t in {"layout", "flexipage", "permissionset", "profile"}:
+        if t == "auradefinitionbundle":
+            # The API suffixes Aura rows with ".<n>" (``customerDetails.2``).
+            return idx.components.get(("aura_bundle", low.split(".", 1)[0])) or str(
+                external(mtype, name)
+            )
+        if t == "flexipage" and low.startswith("flexipage:"):
+            return None  # standard page templates/components (flexipage:tabset …), not org metadata
+        if t in {
+            "layout",
+            "flexipage",
+            "permissionset",
+            "profile",
+            "customtab",
+            "customapplication",
+            "pathassistant",
+        }:
             cat = {
                 "layout": "page_layout",
                 "flexipage": "flexipage",
                 "permissionset": "permission_set",
                 "profile": "profile",
+                "customtab": "custom_tab",
+                "customapplication": "custom_application",
+                "pathassistant": "path_assistant",
             }[t]
             return idx.components.get((cat, low)) or str(external(mtype, name))
         if t == "report":
@@ -985,8 +1295,6 @@ def _fold_api_rows(
             "profile",
             "customlabel",
             "staticresource",
-            "auradefinitionbundle",
-            "customtab",
             "listview",
             "recordtype",
             "compactlayout",
@@ -1015,6 +1323,13 @@ def _fold_api_rows(
                 e.corroborated_by_api = True
                 e.confidence = min(1.0, e.confidence + 0.05)
                 matched = True
+        if not matched:
+            # The API points some rows the other way (CustomObject -> FlexiPage for a
+            # record page assignment); a parser edge in either direction is a match.
+            for e in g.outbound(t):
+                if str(e.target_id) == s:
+                    e.corroborated_by_api = True
+                    matched = True
         if matched:
             g.api_matched += 1
         else:

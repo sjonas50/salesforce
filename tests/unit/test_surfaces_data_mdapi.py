@@ -415,3 +415,95 @@ def test_field_definitions_supplement_fields_hidden_from_describe() -> None:
         and by["Lead.Score__c"].raw["hidden_from_describe"]
     )
     assert supplement_from_field_definitions(snap, rows) == 0  # idempotent
+
+
+def test_source_tree_handles_multi_package_projects_and_skips_git(tmp_path: Path) -> None:
+    """sfdx-project.json with several packageDirectories; ``.git/objects`` is not metadata."""
+    (tmp_path / ".git" / "objects" / "ab").mkdir(parents=True)
+    (tmp_path / "sfdx-project.json").write_text(
+        '{"packageDirectories": [{"path": "./es-base-objects"}, {"path": "./es-base-code"}]}'
+    )
+    a = tmp_path / "es-base-objects" / "main" / "default"
+    (a / "objects" / "Reservation__c" / "fields").mkdir(parents=True)
+    (a / "objects" / "Reservation__c" / "Reservation__c.object-meta.xml").write_text(
+        '<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata"><label>R</label></CustomObject>'
+    )
+    (a / "objects" / "Reservation__c" / "fields" / "Status__c.field-meta.xml").write_text(
+        '<CustomField xmlns="http://soap.sforce.com/2006/04/metadata"><fullName>Status__c</fullName><type>Text</type><length>10</length></CustomField>'
+    )
+    b = tmp_path / "es-base-code" / "main" / "default"
+    (b / "objects" / "Reservation__c" / "fields").mkdir(parents=True)
+    (b / "objects" / "Reservation__c" / "fields" / "Notes__c.field-meta.xml").write_text(
+        '<CustomField xmlns="http://soap.sforce.com/2006/04/metadata"><fullName>Notes__c</fullName><type>Text</type><length>10</length></CustomField>'
+    )
+    (b / "classes").mkdir()
+    (b / "classes" / "MarketServices.cls").write_text("public with sharing class MarketServices {}")
+    (b / "classes" / "MarketServices.cls-meta.xml").write_text(
+        '<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata"><apiVersion>66.0</apiVersion></ApexClass>'
+    )
+    tree = SourceTree(tmp_path)
+    assert [r.relative_to(tmp_path).as_posix() for r in tree.roots] == [
+        "es-base-objects/main/default",
+        "es-base-code/main/default",
+    ]
+    objs = {o.name: o for o in tree.object_files()}
+    assert set(objs["Reservation__c"].fields) == {"Status__c", "Notes__c"}  # merged across packages
+    assert CategoryName.APEX_CLASS in tree.present_categories()
+
+
+def test_cmt_records_are_read_from_source_format(tmp_path: Path) -> None:
+    from offramp.extract.dispatch.cmt_reader import read_cmt_records_from_source
+
+    d = tmp_path / "customMetadata"
+    d.mkdir()
+    (d / "Customer_Fields.Contact_Customer_Fields.md-meta.xml").write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<CustomMetadata xmlns="http://soap.sforce.com/2006/04/metadata" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <label>Contact Customer Fields</label>
+    <protected>false</protected>
+    <values><field>Customer_City__c</field><value xsi:type="xsd:string">MailingCity</value></values>
+    <values><field>Sobject_Type__c</field><value xsi:type="xsd:string">Contact</value></values>
+</CustomMetadata>"""
+    )
+    rows = read_cmt_records_from_source([tmp_path])
+    assert len(rows) == 1 and rows[0].cmt_type == "Customer_Fields__mdt"
+    assert rows[0].developer_name == "Contact_Customer_Fields"
+    assert rows[0].fields == {"Customer_City__c": "MailingCity", "Sobject_Type__c": "Contact"}
+
+
+def test_tab_application_and_path_assistant_references() -> None:
+    tab = get_extractor(CategoryName.CUSTOM_TAB).parse_payload(
+        _rec(CategoryName.CUSTOM_TAB, "tabs/Territory__c.tab-meta.xml", "Territory__c")
+    )
+    assert tab["tab_kind"] == "object" and tab["references"]["objects"] == ["Territory__c"]
+    tab2 = get_extractor(CategoryName.CUSTOM_TAB).parse_payload(
+        _rec(CategoryName.CUSTOM_TAB, "tabs/Lead_Intake.tab-meta.xml", "Lead_Intake")
+    )
+    assert tab2["tab_kind"] == "component" and tab2["references"]["lwc_bundles"] == ["leadCard"]
+    app = get_extractor(CategoryName.CUSTOM_APPLICATION).parse_payload(
+        _rec(
+            CategoryName.CUSTOM_APPLICATION,
+            "applications/Sales_Offramp.app-meta.xml",
+            "Sales_Offramp",
+        )
+    )
+    assert app["references"] == {
+        "objects": ["Lead", "Opportunity"],
+        "tabs": ["Territory__c", "Lead_Intake"],
+        "flexipages": ["Lead_Record_Page"],
+    }
+    path = get_extractor(CategoryName.PATH_ASSISTANT).parse_payload(
+        _rec(
+            CategoryName.PATH_ASSISTANT,
+            "pathAssistants/Lead_Status_Path.pathAssistant-meta.xml",
+            "Lead_Status_Path",
+        )
+    )
+    assert path["object"] == "Lead" and path["picklist_field"] == "Lead.Status"
+    assert path["references"]["fields"] == [
+        "Lead.Country__c",
+        "Lead.Routed__c",
+        "Lead.Score__c",
+        "Lead.Status",
+    ]
+    assert path["record_type"] == "" and path["active"] is True

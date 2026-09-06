@@ -48,12 +48,16 @@ class CategoryName(StrEnum):
     PLATFORM_EVENT = "platform_event"
     CHANGE_DATA_CAPTURE = "change_data_capture"
     LWC_BUNDLE = "lwc_bundle"
+    AURA_BUNDLE = "aura_bundle"
     # ---- surface categories (UI / security / reporting) ----
     PAGE_LAYOUT = "page_layout"
     FLEXIPAGE = "flexipage"
     PERMISSION_SET = "permission_set"
     PROFILE = "profile"
     REPORT = "report"
+    CUSTOM_TAB = "custom_tab"
+    CUSTOM_APPLICATION = "custom_application"
+    PATH_ASSISTANT = "path_assistant"
 
 
 AUTOMATION_CATEGORIES: frozenset[CategoryName] = frozenset(
@@ -66,6 +70,9 @@ AUTOMATION_CATEGORIES: frozenset[CategoryName] = frozenset(
         CategoryName.PERMISSION_SET,
         CategoryName.PROFILE,
         CategoryName.REPORT,
+        CategoryName.CUSTOM_TAB,
+        CategoryName.CUSTOM_APPLICATION,
+        CategoryName.PATH_ASSISTANT,
     }
 )
 UI_CATEGORIES: frozenset[CategoryName] = frozenset(
@@ -155,7 +162,9 @@ class EvidenceChannel(StrEnum):
     RULE_XML = "rule_xml"  # assignment / escalation / auto-response / sharing / approval
     ROLLUP_XML = "rollup_xml"
     LWC_IMPORT = "lwc_import"
+    AURA_MARKUP = "aura_markup"  # Aura component markup + controller/helper JS
     CMT_DISPATCH = "cmt_dispatch"
+    CMT_RECORD = "cmt_record"  # custom metadata rows as configuration nodes
     SCHEMA = "schema"  # lookup / master-detail relationship
     PATH = "path"  # object inferred from file path (objects/<Object>/...)
     DEPENDENCY_API = "dependency_api"  # MetadataComponentDependency row (cross-check)

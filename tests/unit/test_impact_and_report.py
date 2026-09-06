@@ -50,13 +50,15 @@ def _node(graph: DependencyGraph, name: str, kind: str | None = None) -> str:
 
 def test_where_used_field_groups_by_category_with_evidence(graph: DependencyGraph) -> None:
     wu = impact.where_used(graph, _node(graph, "Lead.Country__c", "field"))
-    assert wu.total == 7 and wu.active_total == 7 and wu.automation_total == 5
+    # 8 = 5 automation + layout + page + the Lead_Status_Path path assistant key field
+    assert wu.total == 8 and wu.active_total == 8 and wu.automation_total == 5
     assert set(wu.by_category) == {
         "apex_class",
         "assignment_rule",
         "record_triggered_flow",
         "page_layout",
         "permission_set",
+        "path_assistant",
     }
     flow_ref = wu.by_category["record_triggered_flow"][0]
     assert flow_ref.evidence == "flow_xml" and flow_ref.corroborated_by_api
@@ -65,7 +67,7 @@ def test_where_used_field_groups_by_category_with_evidence(graph: DependencyGrap
     )
     assert writer.notes == "write"
     js = wu.to_jsonable()
-    assert js["target"]["api_name"] == "Lead.Country__c" and js["total"] == 7
+    assert js["target"]["api_name"] == "Lead.Country__c" and js["total"] == 8
     assert js["automation_total"] == 5
 
 
@@ -199,11 +201,13 @@ def test_clustering_groups_lead_routing_process(graph: DependencyGraph) -> None:
 def test_orphan_resolver_uses_graph(graph: DependencyGraph, run: ExtractRunResult) -> None:
     rep = resolve_orphans(ResolutionInputs(components=run.components, graph=graph))
     channels = {r.apex_class_name: r.channel for r in rep.resolved}
+    # LeadController is imported by the leadCard LWC and is the controller of the
+    # leadCardAura bundle: referenced in the graph, so never an orphan candidate.
     assert channels == {
-        "LeadController": "lwc_import",
         "LeadScoringServiceTest": "test",
         "NightlyLeadCleanup": "cron_trigger",
     }
+    assert "LeadController" not in set(rep.unresolved)
     assert rep.unresolved == ["DynamicFieldReader", "UnusedLegacyUtil"]
     assert rep.referenced >= 6  # handlers, services, interface, dispatcher…
 
@@ -233,7 +237,7 @@ def test_render_context_and_html(run: ExtractRunResult, graph: DependencyGraph) 
     ctx = build_context(_inputs(run, graph))
     assert ctx["save_impacts"][0]["object"] == "Lead"
     assert any(
-        w["name"] == "Lead.Country__c" and w["total"] == 7 and w["automation_total"] == 5
+        w["name"] == "Lead.Country__c" and w["total"] == 8 and w["automation_total"] == 5
         for w in ctx["where_used"]
     )
     assert [u["field"] for u in ctx["unused_fields"]][:3] == [
@@ -272,7 +276,7 @@ def test_cli_extract_and_impact_round_trip(
 
     assert main(["impact", "--from", str(out), "--where-used", "Lead.Country__c"]) == 0
     text = capsys.readouterr().out
-    assert "7 references" in text and "LeadRouting" in text
+    assert "8 references" in text and "LeadRouting" in text
 
     assert main(["impact", "--from", str(out), "--save", "Opportunity", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -328,3 +332,21 @@ def test_cli_rejects_missing_source(tmp_path: Path) -> None:
         )
         == 1
     )
+
+
+def test_find_prefers_data_model_nodes_over_same_named_components(graph: DependencyGraph) -> None:
+    """Sharing rules / workflow files are named after their object; `Lead` must mean the object."""
+    n = graph.find("Lead")
+    assert n is not None and n.kind == "object"
+    assert graph.find("Lead", kind="component") is not None  # the workflow file is still reachable
+
+
+def test_cmt_records_are_configuration_nodes(graph: DependencyGraph, run: ExtractRunResult) -> None:
+    """Trigger_Action__mdt rows link the dispatcher's handlers; classes reading the type link to rows."""
+    rows = [n for n in graph.nodes.values() if n.kind == "cmt_record"]
+    assert rows and all(n.category == "custom_metadata_record" for n in rows)
+    row = next(n for n in rows if "LeadValidationHandler" in str(n.meta.get("fields")))
+    targets = {graph.node(str(e.target_id)).api_name for e in graph.outbound(row.id)}  # type: ignore[union-attr]
+    assert "Trigger_Action__mdt" in targets and "LeadValidationHandler" in targets
+    readers = {graph.node(str(e.source_id)).api_name for e in graph.inbound(row.id)}  # type: ignore[union-attr]
+    assert "MetadataTriggerHandler" in readers  # it queries Trigger_Action__mdt

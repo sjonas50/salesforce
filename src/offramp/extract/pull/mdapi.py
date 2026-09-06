@@ -38,6 +38,9 @@ PARTIAL_TYPES: list[str] = [
     "PermissionSet",
     "Profile",
     "Report",
+    "CustomTab",
+    "CustomApplication",
+    "PathAssistant",
 ]
 FOLDERED_TYPES = {
     "Report": "ReportFolder",
@@ -52,10 +55,11 @@ _TYPE_GROUPS: list[list[str]] = [
     ["CustomObject", "CustomField", "ValidationRule", "RecordType"],
     ["Workflow"],
     ["ApprovalProcess", "AssignmentRules", "AutoResponseRules", "EscalationRules", "SharingRules"],
-    ["LightningComponentBundle"],
+    ["LightningComponentBundle", "AuraDefinitionBundle"],
     ["Layout", "FlexiPage"],
     ["PermissionSet", "Profile"],
     ["Report"],
+    ["CustomTab", "CustomApplication", "PathAssistant"],
 ]
 
 

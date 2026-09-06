@@ -226,3 +226,24 @@ def test_classify_flow_variants() -> None:
     )
     assert classify_flow({"processType": "Flow", "screens": [{}]}) is CategoryName.SCREEN_FLOW
     assert classify_flow({"processType": "AutoLaunchedFlow"}) is CategoryName.AUTOLAUNCHED_FLOW
+
+
+def test_api_budget_reads_daily_requests() -> None:
+    from offramp.extract.pull.tooling_api import api_budget
+
+    assert api_budget({"DailyApiRequests": {"Max": 15000, "Remaining": 12000}}) == (12000, True)
+    assert api_budget({"DailyApiRequests": {"Max": 15000, "Remaining": 40}}) == (40, False)
+    assert api_budget({}) == (None, True)  # unknown -> do not block
+    assert api_budget(None) == (None, True)
+
+
+@pytest.mark.asyncio
+async def test_tooling_client_skips_categories_another_path_covers() -> None:
+    backend = _backend()
+    gateway = MCPGateway(backend=backend, engram=InMemoryEngramClient())
+    client = ToolingApiPullClient(
+        gateway=gateway, org_alias="rest_org", skip_categories={CategoryName.PAGE_LAYOUT}
+    )
+    recs = list(await client.pull())
+    assert CategoryName.PAGE_LAYOUT not in {r.category for r in recs}
+    assert CategoryName.APEX_CLASS in {r.category for r in recs}

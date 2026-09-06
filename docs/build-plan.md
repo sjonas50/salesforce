@@ -123,11 +123,29 @@ Run against a fresh Developer Edition (`offramp-scratch`, sf CLI session auth) w
 
 The whole X-Ray flow was then driven on that scan: `offramp impact` (where-used, save impact in OoE order, change impact, unused, legacy) answers correctly for fields that describe hides; the HTML report renders all twelve sections (7.6 MB, of which 6.7 MB is the embedded graph — a scaling item for 5K-component orgs); `offramp kg ingest` of the org scan and the fixture scan collapses all 26 shared automations to one entry each, the only separate entries being the two that genuinely differ (auto-response sender email, Process Builder present only in the fixture); `kg search / families / scans / diff / export` work. Both FalkorDB mirrors were then loaded and queried with Cypher (`make falkordb`, no Docker): the X-Ray graph as `offramp-scratch` (5,960 nodes, 16,216 relationships) and the library as `offramp_knowledge`, where `MATCH (p:Process)-[:FOUND_IN]->(o:Org)` returns the 26 processes shared by both orgs. The run surfaced fifteen API behaviours, now CLAUDE.md pitfalls 14 and 17–23.
 
+## Third-party code: Easy Spaces (2026-09-06)
+
+Salesforce's Easy Spaces LWC sample app (108 components: 4 package dirs of Apex, LWC, Aura, flows, custom metadata, record pages, permission sets) was deployed into the same org with its sample data. First scan: 694 components, 37 unresolved references, Dependency API cross-check 27 matched / 60 API-only. Fixes driven by that code — case-insensitive Apex qualifiers, `Outer.Inner` types, platform types, metadata-relationship chains, custom-metadata layout naming, LWC composition via templates and `c/` imports, API-row suffix/direction/template handling, coverage double-counting, name lookup preferring data-model nodes — brought it to 692 components, 1 unresolved reference (an inner class used unqualified), 65 matched / 8 API-only. The 8 are Aura bundle rows (Aura is not an extraction category) plus one lookup-derived object reference. The library ingest adds Easy Spaces' 6 automations and places `MarketServices`/`CustomerServices`/`LeadController` in one shape family with our fixture code.
+
+### Easy Spaces gap analysis (source scan vs org scan, both in FalkorDB)
+
+Scanning the Easy Spaces source tree directly (`offramp xray --source-dir`) and diffing it against the org scan, per component, showed the two extraction paths agree on 272 of 282 edges; the 10 source-only edges are the custom-metadata relationship chain the org path cannot follow (pitfall 27). Gaps found and fixed: the source reader saw only one of four package directories and matched `.git/objects` as metadata (pitfall 26); flows that embed LWCs as screen components or launch component actions had no edge to them (now `lwc_bundles` references, with fidelity notes saying why a flow is partial); Lightning message channels were invisible (pitfall 28); custom metadata records in source format were not read.
+
+Gaps from that analysis, all closed the same day:
+
+1. **Aura bundles** are now a category (`aura_bundle`, `src/extract/aura`): controller class, Apex actions, child components and events, `startFlow`, message channels, record-form objects/fields, labels. Easy Spaces source scans with zero unresolved references; every earlier API-only cross-check row is now a parser edge.
+2. **Custom metadata records** are `cmt_record` graph nodes: a change to `Contact.MailingCity` reaches `CustomerServices` through `Customer_Fields__mdt.Contact_Customer_Fields` at depth two; rows are read from the org (REST) and from source (`customMetadata/*.md-meta.xml`).
+3. **Custom tabs, custom applications, path assistants** are surface categories with their own extractors and edges (tab → object/page/component, app → tabs/pages/objects, path → picklist field + key fields). Prompts, branding, content assets and themes remain out of scope (nothing depends on them).
+4. **Inner classes used unqualified** resolve to the declaring class.
+5. **Quota**: the scan reads `/limits` first and refuses when fewer requests remain than a scan needs (`--ignore-api-budget` overrides), and the Tooling client no longer fetches per-record Metadata for surfaces the Metadata API path already retrieves, which removes ~420 of ~600 calls per scan.
+
+Still open: re-verifying all of the above against the org once its 24 h request window resets (the fixture now carries an Aura bundle, an event, two tabs, an app and a path assistant that have not been deployed yet).
+
 ## Known limitations (tracked, not yet scheduled)
+
 
 - The Flow component on Lightning pages (`flowruntime:flowRuntimeForFlexipage`) could not be deployed through the Metadata API in any region or template we tried, so the real-org fixture page carries fields and an LWC only; the page→flow edge is covered by an inline unit test. Build one page in App Builder, retrieve it, and diff to close this.
 - The fixture org is single-user and small: fill rates and record counts are exercised but not representative, and reports shipped by Salesforce are not describable by the API.
-
 - Apex analysis is tokenizer-based: class properties are not typed, `is_sobject_name` uses a fixed standard-object list plus suffix rules, and inner-class references (`Outer.Inner`) resolve only when the outer class is in the corpus. A grammar-backed parser (AD-31) is the fix.
 - `MetadataComponentDependency` rows with no parser evidence become `dependency_api` edges at 0.6 confidence so the report can show them; they are excluded from "live automation" counts but do appear in totals.
 - The Tooling path reads reports through the Analytics describe endpoint, capped at the 300 most recently run; the Metadata API path has no cap.

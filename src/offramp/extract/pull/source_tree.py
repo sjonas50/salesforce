@@ -37,6 +37,10 @@ from offramp.extract.pull.base import RawMetadataRecord
 log = get_logger(__name__)
 
 _KNOWN_DIRS = (
+    "tabs",
+    "applications",
+    "pathAssistants",
+    "aura",
     "classes",
     "triggers",
     "flows",
@@ -57,6 +61,8 @@ _KNOWN_DIRS = (
 
 # Glob → CategoryName. Interpretation is the per-category extractor's job;
 # the reader only classifies files and captures their text.
+_BUNDLE_CATEGORIES = {CategoryName.LWC_BUNDLE, CategoryName.AURA_BUNDLE}
+
 CATEGORY_GLOBS: dict[CategoryName, list[str]] = {
     CategoryName.RECORD_TRIGGERED_FLOW: ["flows/*.flow-meta.xml"],
     CategoryName.SCREEN_FLOW: ["flows/*.flow-meta.xml"],
@@ -79,11 +85,15 @@ CATEGORY_GLOBS: dict[CategoryName, list[str]] = {
     CategoryName.PLATFORM_EVENT: ["objects/*__e/*.object-meta.xml"],
     CategoryName.CHANGE_DATA_CAPTURE: ["_tooling/cdc_subscriptions.json"],
     CategoryName.LWC_BUNDLE: ["lwc/*/"],
+    CategoryName.AURA_BUNDLE: ["aura/*/"],
     CategoryName.PAGE_LAYOUT: ["layouts/*.layout-meta.xml"],
     CategoryName.FLEXIPAGE: ["flexipages/*.flexipage-meta.xml"],
     CategoryName.PERMISSION_SET: ["permissionsets/*.permissionset-meta.xml"],
     CategoryName.PROFILE: ["profiles/*.profile-meta.xml"],
     CategoryName.REPORT: ["reports/**/*.report-meta.xml"],
+    CategoryName.CUSTOM_TAB: ["tabs/*.tab-meta.xml"],
+    CategoryName.CUSTOM_APPLICATION: ["applications/*.app-meta.xml"],
+    CategoryName.PATH_ASSISTANT: ["pathAssistants/*.pathAssistant-meta.xml"],
 }
 
 # Flow variants and field kinds share globs; try the most specific first.
@@ -112,23 +122,50 @@ class ObjectFiles:
     validation_rules: dict[str, str] = field(default_factory=dict)
 
 
-def locate_source_root(root: Path) -> Path:
-    """Return the directory that directly contains ``classes/``, ``objects/``, etc.
+_SKIP_PARTS = {".git", "node_modules", ".sfdx", ".sf", ".vscode"}
 
-    Accepts the directory itself, an SFDX project root (``force-app/main/default``),
-    or any ancestor of one of those.
+
+def locate_source_roots(root: Path) -> list[Path]:
+    """Every directory that directly contains ``classes/``, ``objects/``, etc.
+
+    Accepts the directory itself, an SFDX project root, or any ancestor. A
+    multi-package project (``sfdx-project.json`` with several
+    ``packageDirectories``, each holding ``main/default``) yields one root per
+    package so nothing is silently dropped. VCS and tooling directories are
+    skipped: ``.git/objects`` is not a metadata folder.
     """
     if any((root / d).is_dir() for d in _KNOWN_DIRS):
-        return root
+        return [root]
+    roots: list[Path] = []
+    project = root / "sfdx-project.json"
+    if project.is_file():
+        try:
+            for pd in json.loads(project.read_text(encoding="utf-8")).get("packageDirectories", []):
+                base = root / str(pd.get("path", "")).lstrip("./")
+                for cand in (base / "main" / "default", base):
+                    if cand.is_dir() and any((cand / d).is_dir() for d in _KNOWN_DIRS):
+                        roots.append(cand)
+                        break
+        except (OSError, ValueError):
+            roots = []
+    if roots:
+        return roots
     candidates = sorted(
         {p.parent for d in _KNOWN_DIRS for p in root.glob(f"**/{d}") if p.is_dir()},
         key=lambda p: (len(p.parts), str(p)),
     )
     for c in candidates:
-        if "node_modules" in c.parts or ".sfdx" in c.parts:
+        if _SKIP_PARTS & set(c.parts):
             continue
-        return c
-    return root
+        if any(c.is_relative_to(r) for r in roots):
+            continue
+        roots.append(c)
+    return roots or [root]
+
+
+def locate_source_root(root: Path) -> Path:
+    """First source root; see :func:`locate_source_roots`."""
+    return locate_source_roots(root)[0]
 
 
 class SourceTree:
@@ -136,7 +173,8 @@ class SourceTree:
 
     def __init__(self, root: Path) -> None:
         self.given_root = root
-        self.root = locate_source_root(root)
+        self.roots = locate_source_roots(root)
+        self.root = self.roots[0]
         self._text_cache: dict[str, str] = {}
 
     # ---- automation categories ------------------------------------------------
@@ -179,8 +217,8 @@ class SourceTree:
 
     def _iter_category_paths(self, cat: CategoryName) -> Iterator[Path]:
         for glob in CATEGORY_GLOBS.get(cat, []):
-            for path in sorted(self.root.glob(glob)):
-                if cat is CategoryName.LWC_BUNDLE:
+            for path in sorted(p for r in self.roots for p in r.glob(glob)):
+                if cat in _BUNDLE_CATEGORIES:
                     if path.is_dir():
                         yield path
                 elif path.is_file():
@@ -189,7 +227,7 @@ class SourceTree:
     def _iter_category(self, cat: CategoryName) -> Iterator[tuple[Path, dict[str, Any], str]]:
         seen_names: set[str] = set()
         for path in self._iter_category_paths(cat):
-            if cat is CategoryName.LWC_BUNDLE:
+            if cat in _BUNDLE_CATEGORIES:
                 payload = self._lwc_bundle_payload(path)
                 api_name = path.name
             elif cat in {CategoryName.APEX_CLASS, CategoryName.APEX_TRIGGER}:
@@ -262,23 +300,29 @@ class SourceTree:
         return bundle
 
     def _rel(self, path: Path) -> str:
-        try:
-            return str(path.relative_to(self.root))
-        except ValueError:
-            return str(path)
+        for r in self.roots:
+            if path.is_relative_to(r):
+                return str(path.relative_to(r))
+        return str(path)
 
     # ---- schema ---------------------------------------------------------------
 
     def object_files(self) -> list[ObjectFiles]:
         """Everything under ``objects/`` grouped per sObject."""
-        objects_dir = self.root / "objects"
-        if not objects_dir.is_dir():
-            return []
-        out: list[ObjectFiles] = []
-        for obj_dir in sorted(p for p in objects_dir.iterdir() if p.is_dir()):
-            of = ObjectFiles(name=obj_dir.name)
+        # One object can be split across packages (es-base-objects defines
+        # Reservation__c, es-base-code adds fields to it): merge by name.
+        by_name: dict[str, ObjectFiles] = {}
+        obj_dirs = sorted(
+            p
+            for r in self.roots
+            if (r / "objects").is_dir()
+            for p in (r / "objects").iterdir()
+            if p.is_dir()
+        )
+        for obj_dir in obj_dirs:
+            of = by_name.setdefault(obj_dir.name, ObjectFiles(name=obj_dir.name))
             meta = obj_dir / f"{obj_dir.name}.object-meta.xml"
-            if meta.is_file():
+            if meta.is_file() and not of.object_xml:
                 of.object_xml = meta.read_text(encoding="utf-8")
             for fp in sorted((obj_dir / "fields").glob("*.field-meta.xml")):
                 of.fields[derive_api_name(fp)] = fp.read_text(encoding="utf-8")
@@ -286,17 +330,17 @@ class SourceTree:
                 of.record_types[derive_api_name(fp)] = fp.read_text(encoding="utf-8")
             for fp in sorted((obj_dir / "validationRules").glob("*.validationRule-meta.xml")):
                 of.validation_rules[derive_api_name(fp)] = fp.read_text(encoding="utf-8")
-            out.append(of)
-        return out
+        return list(by_name.values())
 
     # ---- tooling dumps --------------------------------------------------------
 
     def tooling_json(self, name: str) -> Any:
         """Load ``_tooling/<name>.json`` if present, else ``None``."""
-        p = self.root / "_tooling" / f"{name}.json"
-        if not p.is_file():
-            return None
-        return json.loads(p.read_text(encoding="utf-8"))
+        for r in self.roots:
+            p = r / "_tooling" / f"{name}.json"
+            if p.is_file():
+                return json.loads(p.read_text(encoding="utf-8"))
+        return None
 
 
 _SUFFIX_RE = re.compile(

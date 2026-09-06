@@ -20,6 +20,7 @@ from typing import Any
 
 from offramp.core.config import get_settings
 from offramp.core.logging import get_logger
+from offramp.core.models import CategoryName
 from offramp.engram.client import EngramClient
 from offramp.extract.orchestrator import ExtractOrchestrator, ExtractRunResult, ToolingSupplement
 from offramp.extract.pull.fixture import FixturePullClient, SourceDirPullClient
@@ -34,6 +35,11 @@ def add_source_args(p: argparse.ArgumentParser) -> None:
         "--source-dir", type=Path, help="Customer-supplied SFDX project or sf retrieve output."
     )
     src.add_argument("--org", help="Salesforce org alias; credentials from SF_* env (JWT bearer).")
+    p.add_argument(
+        "--ignore-api-budget",
+        action="store_true",
+        help="Scan even when /limits says fewer API requests remain than a scan needs.",
+    )
     p.add_argument(
         "--via",
         choices=["rest", "mdapi", "sf-cli"],
@@ -114,10 +120,46 @@ async def connect(args: argparse.Namespace, engram: EngramClient) -> ConnectedSo
     backend = SimpleSalesforceBackend(settings=sf_settings, process_id="xray", quota=None)
     gateway = MCPGateway(backend=backend, engram=engram)
 
-    from offramp.extract.pull.tooling_api import ToolingApiPullClient
+    from offramp.extract.pull.tooling_api import ToolingApiPullClient, api_budget
 
+    # Org-wide daily request quota (pitfall 4): refuse a scan that cannot finish.
+    try:
+        remaining, ok = api_budget(await gateway.sf_restful("limits"))
+    except Exception as exc:
+        log.warning("cli.api_limits_unavailable", org=args.org, error=str(exc)[:200])
+        remaining, ok = None, True
+    if remaining is not None:
+        log.info("cli.api_budget", org=args.org, daily_requests_remaining=remaining)
+    if not ok and not getattr(args, "ignore_api_budget", False):
+        log.error(
+            "cli.api_budget_insufficient",
+            org=args.org,
+            daily_requests_remaining=remaining,
+            hint="wait for the rolling 24h window or pass --ignore-api-budget",
+        )
+        await backend.aclose()
+        return None
+
+    via = getattr(args, "via", "rest")
     tooling = ToolingApiPullClient(
-        gateway=gateway, org_alias=alias, api_version=sf_settings.api_version
+        gateway=gateway,
+        org_alias=alias,
+        api_version=sf_settings.api_version,
+        # In the composite path the Metadata API retrieves these in full.
+        skip_categories=(
+            {
+                CategoryName.PAGE_LAYOUT,
+                CategoryName.FLEXIPAGE,
+                CategoryName.PERMISSION_SET,
+                CategoryName.PROFILE,
+                CategoryName.REPORT,
+                CategoryName.CUSTOM_TAB,
+                CategoryName.CUSTOM_APPLICATION,
+                CategoryName.PATH_ASSISTANT,
+            }
+            if via == "rest"
+            else set()
+        ),
     )
 
     supplement = ToolingSupplement()

@@ -1,0 +1,11 @@
+<aura:component implements="flexipage:availableForRecordHome,force:hasRecordId" controller="LeadController" access="global">
+    <aura:attribute name="recordId" type="String"/>
+    <aura:attribute name="score" type="Integer"/>
+    <aura:handler name="init" value="{!this}" action="{!c.doInit}"/>
+    <aura:registerEvent name="leadScored" type="c:leadScoredEvent"/>
+    <lightning:messageChannel type="Lead_Selection__c" aura:id="leadChannel"/>
+    <lightning:recordForm objectApiName="Lead" recordId="{!v.recordId}" fields="['Company','Score__c','Routed__c']"/>
+    <c:leadCard recordId="{!v.recordId}"/>
+    <lightning:flow aura:id="captureFlow"/>
+    <lightning:button label="{!$Label.c.Capture_Lead}" onclick="{!c.startCapture}"/>
+</aura:component>

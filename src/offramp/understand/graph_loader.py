@@ -39,6 +39,7 @@ _LABELS = {
     "field": "Field",
     "record_type": "RecordType",
     "external": "External",
+    "cmt_record": "ConfigRecord",
 }
 
 

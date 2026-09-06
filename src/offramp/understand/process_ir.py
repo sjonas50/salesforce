@@ -197,15 +197,28 @@ def _from_flow(c: Component, raw: dict[str, Any]) -> ProcessDefinition:
     calls: set[str] = set()
     steps: list[Step] = []
     fidelity = Fidelity.FULL
+    notes: list[str] = []
     for el in raw.get("elements", []):
         s = _flow_step(el, host, var_types, reads, writes, objects, calls)
         if s is None:
             continue
-        if s.kind in {StepKind.SCREEN} or (
-            s.kind == StepKind.ASSIGN and any(isinstance(v, dict) for v in s.inputs.values())
-        ):
-            fidelity = Fidelity.PARTIAL if fidelity is Fidelity.FULL else fidelity
+        if s.kind is StepKind.SCREEN:
+            custom = sorted(
+                str(f.get("extension"))[2:]
+                for f in el.get("fields", [])
+                if str(f.get("extension", "")).startswith("c:")
+            )
+            notes.append(
+                f"screen '{s.id}' is user interaction"
+                + (f" with custom component(s) {', '.join(custom)}" if custom else "")
+            )
+        elif s.kind == StepKind.ASSIGN and any(isinstance(v, dict) for v in s.inputs.values()):
+            notes.append(f"assignment '{s.id}' uses expressions the model keeps as references")
+        elif el.get("kind") == "actionCalls" and el.get("action_type") == "component":
+            notes.append(f"action '{s.id}' launches UI component {el.get('action_name')}")
         steps.append(s)
+    if notes:
+        fidelity = Fidelity.PARTIAL if fidelity is Fidelity.FULL else fidelity
     for c_ in trigger.when.conditions:
         reads.update(f for f in [c_.left] if f and "." in f and not f.startswith("$"))
     # Sorted by name: the Tooling JSON and the XML list resources in different orders,
@@ -240,6 +253,7 @@ def _from_flow(c: Component, raw: dict[str, Any]) -> ProcessDefinition:
         fields_written=sorted(writes),
         calls=sorted(calls),
         fidelity=fidelity,
+        fidelity_notes=notes,
         active=str(raw.get("status", "Active")) == "Active",
     )
 

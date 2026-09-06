@@ -123,3 +123,22 @@ def test_annotations_mark_entry_points() -> None:
     """
     a = analyze(src)
     assert {"aura_enabled", "invocable", "future"} <= set(a.entry_points)
+
+
+def test_lowercase_qualifiers_are_candidate_class_references() -> None:
+    """Apex is case-insensitive: ``customerServices.get()`` may be a static call on CustomerServices."""
+    from offramp.extract.apex import analyze
+
+    src = """@isTest
+    public class CustomerServicesTest {
+        @isTest static void t() {
+            customerServices.Customer c = customerServices.getCustomerFields('Lead');
+            List<Market__c> ms = testDataFactory.makeMarkets(3);
+            String s = name.toLowerCase();
+        }
+    }"""
+    a = analyze(src, name_hint="CustomerServicesTest")
+    assert "customerServices" in a.candidate_class_references
+    assert "testDataFactory" in a.candidate_class_references
+    assert "name" in a.candidate_class_references  # a variable; the builder drops it
+    assert "CustomerServices" not in a.class_references  # never claimed outright

@@ -96,9 +96,11 @@ def _ensure_loaded() -> None:
         "offramp.extract.lwc.bundle",
     ):
         importlib.import_module(mod)
+    from offramp.extract.aura.bundle import AuraBundleExtractor
     from offramp.extract.lwc.bundle import LWCBundleExtractor
 
     _REGISTRY.setdefault(CategoryName.LWC_BUNDLE, LWCBundleExtractor)
+    _REGISTRY.setdefault(CategoryName.AURA_BUNDLE, AuraBundleExtractor)
     _LOADED = True
 
 
