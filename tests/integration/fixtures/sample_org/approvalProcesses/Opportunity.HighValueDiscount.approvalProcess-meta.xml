@@ -27,6 +27,7 @@
         <label>VP Review</label>
         <assignedApprover>
             <approver><type>relatedUserField</type><name>Owner</name></approver>
+            <whenMultipleApprovers>FirstResponse</whenMultipleApprovers>
         </assignedApprover>
         <entryCriteria>
             <formula>Discount__c &gt; 35 || Amount &gt; 500000</formula>
@@ -53,6 +54,10 @@
         <action><name>Discount_Rejected</name><type>FieldUpdate</type></action>
     </finalRejectionActions>
     <finalApprovalRecordLock>true</finalApprovalRecordLock>
+    <nextAutomatedApprover>
+        <useApproverFieldOfRecordOwner>true</useApproverFieldOfRecordOwner>
+        <userHierarchyField>Manager</userHierarchyField>
+    </nextAutomatedApprover>
     <recordEditability>AdminOnly</recordEditability>
     <showApprovalHistory>true</showApprovalHistory>
 </ApprovalProcess>

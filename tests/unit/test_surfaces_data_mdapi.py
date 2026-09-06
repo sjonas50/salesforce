@@ -17,7 +17,12 @@ from offramp.extract.categories.base import get_extractor
 from offramp.extract.data_profile import profile_from_dump, profile_from_gateway
 from offramp.extract.orchestrator import ExtractOrchestrator, ToolingSupplement
 from offramp.extract.pull.base import RawMetadataRecord
-from offramp.extract.pull.mdapi import PARTIAL_TYPES, CompositePullClient, MetadataApiPullClient
+from offramp.extract.pull.mdapi import (
+    PARTIAL_TYPES,
+    CompositePullClient,
+    MetadataApiPullClient,
+    _source_format_name,
+)
 from offramp.extract.pull.reconciler import ReconciledRecord, reconcile
 from offramp.extract.pull.source_tree import SourceTree
 from offramp.extract.schema import from_source_tree
@@ -57,13 +62,61 @@ def test_layout_and_flexipage_references() -> None:
     fp = get_extractor(CategoryName.FLEXIPAGE).parse_payload(
         _rec(CategoryName.FLEXIPAGE, "flexipages/Lead_Record_Page.flexipage-meta.xml")
     )
+    # The fixture page is shaped like a retrieved record page: fields live in a
+    # field-section facet and the LWC is referenced without the ``c:`` prefix.
     assert fp["references"] == {
         "objects": ["Lead"],
-        "fields": ["Lead.Routed__c"],
-        "flows": ["CaptureLeadDetails"],
+        "fields": ["Lead.Routed__c", "Lead.Score__c"],
+        "flows": [],
         "lwc_bundles": ["leadCard"],
         "visualforce_pages": [],
     }
+
+
+_FLEXIPAGE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexiPage xmlns="http://soap.sforce.com/2006/04/metadata">
+    <flexiPageRegions>
+        <itemInstances>
+            <componentInstance>
+                <componentInstanceProperties><name>flowName</name><value>{flow}</value></componentInstanceProperties>
+                <componentName>{component}</componentName>
+            </componentInstance>
+        </itemInstances>
+        <itemInstances>
+            <componentInstance><componentName>{lwc}</componentName></componentInstance>
+        </itemInstances>
+        <itemInstances>
+            <componentInstance><componentName>force:highlightsPanel</componentName></componentInstance>
+        </itemInstances>
+        <name>main</name>
+        <type>Region</type>
+    </flexiPageRegions>
+    <masterLabel>Intake</masterLabel>
+    <sobjectType>Lead</sobjectType>
+    <template><name>flexipage:recordHomeTemplateDesktop</name></template>
+    <type>RecordPage</type>
+</FlexiPage>
+"""
+
+
+@pytest.mark.parametrize(
+    ("component", "lwc"),
+    [
+        ("flowruntime:flowRuntimeForFlexipage", "leadCard"),  # what App Builder writes
+        ("flowruntime:flowRuntime", "c:leadCard"),  # older / hand-authored form
+    ],
+)
+def test_flexipage_flow_component_and_lwc_naming(component: str, lwc: str) -> None:
+    xml = _FLEXIPAGE_XML.format(flow="CaptureLeadDetails", component=component, lwc=lwc)
+    rec = ReconciledRecord(
+        category=CategoryName.FLEXIPAGE,
+        api_name="Intake",
+        namespace=None,
+        payload={"path": "flexipages/Intake.flexipage-meta.xml", "raw_xml": xml},
+    )
+    fp = get_extractor(CategoryName.FLEXIPAGE).parse_payload(rec)
+    assert fp["references"]["flows"] == ["CaptureLeadDetails"]
+    assert fp["references"]["lwc_bundles"] == ["leadCard"]  # standard components are not bundles
 
 
 def test_permission_set_profile_and_report_references() -> None:
@@ -86,9 +139,9 @@ def test_permission_set_profile_and_report_references() -> None:
         )
     )
     assert rep["object"] == "Lead" and rep["folder"] == "Pipeline"
-    assert (
-        "Lead.Legacy_Segment__c" in rep["references"]["fields"]
-        and "LEAD.CREATED_DATE" in rep["references"]["fields"]
+    # standard columns are UPPER_SNAKE report aliases, mapped to field API names
+    assert {"Lead.Legacy_Segment__c", "Lead.CreatedDate", "Lead.LastName", "Lead.Status"} <= set(
+        rep["references"]["fields"]
     )
 
 
@@ -284,3 +337,81 @@ def test_tier1_flow_assignment_handles_element_references() -> None:
     )
     with pytest.raises(UnsupportedFormulaError):
         _flow_assignment_py({"field": "OwnerId", "value": {"ref": "FindTerritory.Owner__c"}})
+
+
+def test_metadata_api_files_are_renamed_to_source_format() -> None:
+    """A ``retrieve`` ZIP names files by type suffix; the source tree reader needs ``-meta.xml``."""
+    assert _source_format_name("assignmentRules/Lead.assignmentRules") == (
+        "assignmentRules/Lead.assignmentRules-meta.xml"
+    )
+    assert _source_format_name("permissionsets/Sales_User.permissionset") == (
+        "permissionsets/Sales_User.permissionset-meta.xml"
+    )
+    assert _source_format_name("reports/Pipeline/Pipeline_by_Segment.report") == (
+        "reports/Pipeline/Pipeline_by_Segment.report-meta.xml"
+    )
+    # already source format, or content files whose layout the two formats share
+    assert _source_format_name("layouts/A-B.layout-meta.xml") == "layouts/A-B.layout-meta.xml"
+    assert _source_format_name("classes/Foo.cls") == "classes/Foo.cls"
+    assert _source_format_name("classes/Foo.cls-meta.xml") == "classes/Foo.cls-meta.xml"
+    assert _source_format_name("lwc/leadCard/leadCard.js") == "lwc/leadCard/leadCard.js"
+
+
+def test_metadata_api_zip_member_names_are_percent_decoded(tmp_path: Path) -> None:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("unpackaged/layouts/Account-Account %28Marketing%29 Layout.layout", "<Layout/>")
+    client = MetadataApiPullClient(gateway=None, org_alias="o", workdir=tmp_path)
+    client._unzip(buf.getvalue())
+    assert (tmp_path / "layouts" / "Account-Account (Marketing) Layout.layout-meta.xml").exists()
+
+
+def test_report_columns_map_to_field_api_names() -> None:
+    from offramp.extract.categories.surfaces import _report_field
+
+    assert _report_field("LAST_NAME", "Lead") == "Lead.LastName"
+    assert _report_field("CREATED_DATE", "Lead") == "Lead.CreatedDate"
+    assert _report_field("FULL_NAME", "Lead") == "Lead.Name"
+    assert _report_field("LEAD.STATUS", "Lead") == "Lead.Status"
+    assert _report_field("Lead.Score__c", "Lead") == "Lead.Score__c"
+    assert _report_field("Account.Industry", "Lead") == "Account.Industry"
+
+
+def test_field_definitions_supplement_fields_hidden_from_describe() -> None:
+    from offramp.core.models import SchemaSnapshot
+    from offramp.extract.schema import supplement_from_field_definitions
+
+    snap = SchemaSnapshot(org_alias="o", source="describe")
+    rows = {
+        "Lead": [
+            {
+                "QualifiedApiName": "Routed__c",
+                "Label": "Routed",
+                "DataType": "Checkbox",
+                "IsCustom": True,
+            },
+            {
+                "QualifiedApiName": "Territory__c",
+                "Label": "Territory",
+                "DataType": "Lookup(Territory)",
+                "IsCustom": True,
+            },
+            {
+                "QualifiedApiName": "Score__c",
+                "Label": "Score",
+                "DataType": "Formula (Number)",
+                "IsCustom": True,
+            },
+        ]
+    }
+    assert supplement_from_field_definitions(snap, rows) == 3
+    by = {n.api_name: n for n in snap.nodes}
+    assert by["Lead.Routed__c"].field_type == "Checkbox"
+    assert by["Lead.Territory__c"].field_type == "Lookup" and by[
+        "Lead.Territory__c"
+    ].reference_to == ["Territory"]
+    assert (
+        by["Lead.Score__c"].field_type == "Formula"
+        and by["Lead.Score__c"].raw["hidden_from_describe"]
+    )
+    assert supplement_from_field_definitions(snap, rows) == 0  # idempotent

@@ -44,6 +44,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import httpx
 import jwt as _jwt
@@ -233,34 +234,50 @@ class SessionCache:
 def sf_cli_session(org_alias: str, *, runner: Callable[[list[str]], str] | None = None) -> Session:
     """Borrow the access token the Salesforce CLI holds for ``org_alias``.
 
-    ``sf org display --json`` prints ``accessToken`` and ``instanceUrl`` for any
-    org the CLI has authorized (scratch orgs get one at creation). No Connected
+    ``sf org display --json`` prints ``instanceUrl`` for any org the CLI has
+    authorized, but CLI 2.x redacts ``accessToken`` in that output; the token
+    comes from ``sf org auth show-access-token --json`` instead. No Connected
     App is needed, which makes this the fastest way to point X-Ray at a scratch
-    org; production runs still use the JWT bearer flow.
+    or Developer Edition org; production runs still use the JWT bearer flow.
     """
-    argv = ["sf", "org", "display", "--target-org", org_alias, "--json"]
     run = runner or _run_capture
+    display = _sf_json(
+        run, ["sf", "org", "display", "--target-org", org_alias, "--json"], org_alias
+    )
+    instance = display.get("instanceUrl")
+    token = display.get("accessToken")
+    if not token or str(token).startswith("[REDACTED]"):
+        token = _sf_json(
+            run,
+            ["sf", "org", "auth", "show-access-token", "--target-org", org_alias, "--json"],
+            org_alias,
+        ).get("accessToken")
+    if not token or not instance:
+        raise JWTAuthError(
+            f"sf CLI has no accessToken/instanceUrl for {org_alias!r}; "
+            "is the org authorized (`sf org list`)?"
+        )
+    log.info("mcp.jwt_auth.sf_cli_session", org=org_alias, instance_url=instance)
+    return Session(access_token=str(token), instance_url=str(instance).rstrip("/"))
+
+
+def _sf_json(run: Callable[[list[str]], str], argv: list[str], org_alias: str) -> dict[str, Any]:
+    """Run one ``sf ... --json`` command and return its ``result`` object."""
     try:
         out = run(argv)
     except (OSError, subprocess.CalledProcessError) as exc:
         raise JWTAuthError(
-            f"sf CLI session lookup failed for {org_alias!r}: {exc}. "
+            f"sf CLI session lookup failed for {org_alias!r} ({' '.join(argv[:3])}): {exc}. "
             "Is the sf CLI installed and the org authorized (`sf org list`)?"
         ) from exc
     try:
         payload = json.loads(out)
     except json.JSONDecodeError as exc:
-        raise JWTAuthError(f"sf org display returned non-JSON output for {org_alias!r}") from exc
-    result = payload.get("result") or {}
-    token = result.get("accessToken")
-    instance = result.get("instanceUrl")
-    if not token or not instance:
         raise JWTAuthError(
-            f"sf org display for {org_alias!r} has no accessToken/instanceUrl "
-            f"(status={payload.get('status')}, message={payload.get('message')!r})"
-        )
-    log.info("mcp.jwt_auth.sf_cli_session", org=org_alias, instance_url=instance)
-    return Session(access_token=str(token), instance_url=str(instance).rstrip("/"))
+            f"{' '.join(argv[:3])} returned non-JSON output for {org_alias!r}"
+        ) from exc
+    result = payload.get("result")
+    return result if isinstance(result, dict) else {}
 
 
 def _run_capture(argv: list[str]) -> str:

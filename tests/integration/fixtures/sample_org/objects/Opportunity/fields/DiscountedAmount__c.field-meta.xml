@@ -3,6 +3,8 @@
     <fullName>DiscountedAmount__c</fullName>
     <label>Discounted Amount</label>
     <type>Currency</type>
+    <precision>18</precision>
+    <scale>2</scale>
     <formula>Amount * (1 - Discount__c / 100)</formula>
     <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
 </CustomField>

@@ -3,4 +3,6 @@
     <fullName>Priority_Score__c</fullName>
     <label>Priority Score</label>
     <type>Number</type>
+    <precision>18</precision>
+    <scale>0</scale>
 </CustomField>

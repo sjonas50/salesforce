@@ -15,10 +15,15 @@
         <objectType>Lead</objectType>
     </variables>
     <start>
+        <locationX>50</locationX>
+        <locationY>100</locationY>
         <connector><targetReference>GetLead</targetReference></connector>
     </start>
     <recordLookups>
         <name>GetLead</name>
+        <label>Get Lead</label>
+        <locationX>300</locationX>
+        <locationY>200</locationY>
         <object>Lead</object>
         <filters>
             <field>Id</field>
@@ -32,6 +37,9 @@
     </recordLookups>
     <actionCalls>
         <name>SendEmail</name>
+        <label>Send Email</label>
+        <locationX>300</locationX>
+        <locationY>300</locationY>
         <actionName>Lead.Welcome_Lead_Alert</actionName>
         <actionType>emailAlert</actionType>
         <inputParameters>

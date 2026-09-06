@@ -3,6 +3,8 @@
     <fullName>AnnualRevenueK__c</fullName>
     <label>Annual Revenue (K)</label>
     <type>Number</type>
+    <precision>18</precision>
+    <scale>0</scale>
     <formula>AnnualRevenue / 1000</formula>
     <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
 </CustomField>

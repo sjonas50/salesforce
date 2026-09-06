@@ -16,6 +16,9 @@ from offramp.extract.categories.base import CategoryExtractor, register
 from offramp.extract.categories.xml_utils import as_bool, as_list, as_str, get_body
 from offramp.extract.pull.reconciler import ReconciledRecord
 
+# Lightning App Builder writes the Flow component under either name.
+FLOW_COMPONENTS = frozenset({"flowruntime:flowRuntime", "flowruntime:flowRuntimeForFlexipage"})
+
 _RECORD_FIELD = re.compile(r"^Record\.([A-Za-z_][A-Za-z0-9_.]*)$")
 _REPORT_TYPE_SUFFIXES = ("List", "Report")
 
@@ -116,12 +119,16 @@ class FlexiPageExtractor(CategoryExtractor):
                 components.append(
                     {"name": name, "region": as_str(region.get("name")), "properties": props}
                 )
-                if name == "flowruntime:flowRuntime" and props.get("flowName"):
+                if name in FLOW_COMPONENTS and props.get("flowName"):
                     flows.add(props["flowName"])
                 elif name == "flexipage:visualforcePage" and props.get("pageName"):
                     vf_pages.add(props["pageName"])
                 elif name.startswith("c:"):
                     lwc.add(name[2:])
+                elif name and ":" not in name:
+                    # Salesforce writes custom LWC bundles without the ``c:`` prefix;
+                    # every standard component carries a namespace prefix.
+                    lwc.add(name)
         return {
             "object": sobject,
             "surface": "ui",
@@ -234,11 +241,38 @@ def report_object(report_type: str) -> str:
     return rt
 
 
+_REPORT_COLUMN_ALIASES = {
+    "FULL_NAME": "Name",
+    "NAME": "Name",
+    "LAST_UPDATE": "LastModifiedDate",
+    "LAST_UPDATE_BY": "LastModifiedById",
+    "CREATED": "CreatedById",
+    "OWNER": "OwnerId",
+    "OWNER_FULL_NAME": "OwnerId",
+    "ACCOUNT_ID": "AccountId",
+    "CONTACT_ID": "ContactId",
+}
+
+
+def _report_column_to_field(column: str) -> str:
+    """Standard report columns are UPPER_SNAKE (``LAST_NAME``, ``CREATED_DATE``); custom
+    fields already carry their API name (``Score__c``)."""
+    if column in _REPORT_COLUMN_ALIASES:
+        return _REPORT_COLUMN_ALIASES[column]
+    if column.isupper() and not column.endswith("__C"):
+        return "".join(part.capitalize() for part in column.split("_") if part)
+    return column
+
+
 def _report_field(column: str, default_object: str) -> str:
-    """Report columns come as 'LEAD.NAME' or 'Lead.Score__c'; keep qualified, default the object."""
+    """Report columns come as 'LEAD.NAME', 'LAST_NAME' or 'Lead.Score__c'; return 'Object.Field'."""
     if "." in column:
-        return column
-    return f"{default_object}.{column}" if default_object else column
+        obj, _, name = column.partition(".")
+        # Upper-case prefixes ('LEAD.NAME') are report-type aliases, not object API names.
+        obj = default_object if obj.isupper() and default_object else obj
+        return f"{obj}.{_report_column_to_field(name)}"
+    field = _report_column_to_field(column)
+    return f"{default_object}.{field}" if default_object else field
 
 
 @register

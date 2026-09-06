@@ -3,7 +3,6 @@
     <fullName>OpenOpportunityCount__c</fullName>
     <label>Open Opportunities</label>
     <type>Summary</type>
-    <summarizedField>Opportunity.Id</summarizedField>
     <summaryForeignKey>Opportunity.AccountId</summaryForeignKey>
     <summaryOperation>count</summaryOperation>
 </CustomField>

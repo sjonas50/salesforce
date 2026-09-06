@@ -2,6 +2,10 @@
 <CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
     <label>Territory</label>
     <pluralLabel>Territories</pluralLabel>
+    <nameField>
+        <label>Territory Name</label>
+        <type>Text</type>
+    </nameField>
     <sharingModel>ReadWrite</sharingModel>
     <deploymentStatus>Deployed</deploymentStatus>
 </CustomObject>

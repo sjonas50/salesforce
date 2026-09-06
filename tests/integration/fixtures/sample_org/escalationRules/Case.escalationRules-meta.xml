@@ -5,6 +5,7 @@
         <active>true</active>
         <ruleEntry>
             <businessHours>Default</businessHours>
+            <businessHoursSource>Static</businessHoursSource>
             <criteriaItems>
                 <field>Case.Priority</field>
                 <operation>equals</operation>
@@ -17,9 +18,11 @@
             </criteriaItems>
             <escalationAction>
                 <assignedTo>Tier2_Support</assignedTo>
+                <assignedToTemplate>unfiled$public/Case_Escalated</assignedToTemplate>
                 <assignedToType>Queue</assignedToType>
                 <minutesToEscalation>120</minutesToEscalation>
-                <notifyCaseOwnerTemplate>unfiled$public/Case_Escalated</notifyCaseOwnerTemplate>
+                <notifyCaseOwner>true</notifyCaseOwner>
+                <notifyToTemplate>unfiled$public/Case_Escalated</notifyToTemplate>
             </escalationAction>
         </ruleEntry>
     </escalationRule>

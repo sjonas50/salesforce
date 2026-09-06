@@ -5,6 +5,8 @@
     <processType>AutoLaunchedFlow</processType>
     <status>Active</status>
     <start>
+        <locationX>50</locationX>
+        <locationY>100</locationY>
         <object>Lead</object>
         <triggerType>Scheduled</triggerType>
         <filterLogic>and</filterLogic>
@@ -23,8 +25,12 @@
     <decisions>
         <name>OldEnough</name>
         <label>Older than a year?</label>
+        <locationX>300</locationX>
+        <locationY>200</locationY>
+        <defaultConnectorLabel>Default Outcome</defaultConnectorLabel>
         <rules>
             <name>Yes</name>
+            <conditionLogic>and</conditionLogic>
             <conditions>
                 <leftValueReference>$Record.LastModifiedDate</leftValueReference>
                 <operator>LessThan</operator>
@@ -35,6 +41,9 @@
     </decisions>
     <recordDeletes>
         <name>DeleteLead</name>
+        <label>Delete Lead</label>
+        <locationX>300</locationX>
+        <locationY>300</locationY>
         <inputReference>$Record</inputReference>
     </recordDeletes>
 </Flow>

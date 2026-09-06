@@ -17,6 +17,7 @@ import zipfile
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from offramp.core.logging import get_logger
 from offramp.core.models import CategoryName
@@ -146,11 +147,48 @@ class MetadataApiPullClient:
                 rel = member.split("/", 1)[1] if member.startswith("unpackaged/") else member
                 if not rel or rel.endswith("/") or rel == "package.xml":
                     continue
+                # Salesforce percent-encodes member names in the ZIP
+                # (``Account-Account %28Marketing%29 Layout.layout``); the Tooling path
+                # and every other source name them decoded.
+                rel = _source_format_name(unquote(rel))
                 target = (self.workdir / rel).resolve()
                 if not str(target).startswith(str(self.workdir.resolve())):
                     continue  # zip-slip guard
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(zf.read(member))
+
+
+# Metadata API format names the XML by type suffix (``Lead.assignmentRules``,
+# ``Sales_User.permissionset``); the source tree reader expects source format
+# (``Lead.assignmentRules-meta.xml``). Content-bearing types (Apex, LWC, email,
+# static resources) already share their layout between the two formats.
+_META_ONLY_SUFFIXES = (
+    ".approvalProcess",
+    ".assignmentRules",
+    ".autoResponseRules",
+    ".escalationRules",
+    ".sharingRules",
+    ".layout",
+    ".flexipage",
+    ".permissionset",
+    ".profile",
+    ".report",
+    ".flow",
+    ".workflow",
+    ".object",
+    ".customMetadata",
+    ".labels",
+    ".queue",
+    ".group",
+    ".role",
+    ".namedCredential",
+)
+
+
+def _source_format_name(rel: str) -> str:
+    if rel.endswith("-meta.xml") or rel.endswith(".xml"):
+        return rel
+    return rel + "-meta.xml" if rel.endswith(_META_ONLY_SUFFIXES) else rel
 
 
 class CompositePullClient:

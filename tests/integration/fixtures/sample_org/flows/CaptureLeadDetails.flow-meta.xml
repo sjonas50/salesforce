@@ -5,11 +5,15 @@
     <processType>Flow</processType>
     <status>Active</status>
     <start>
+        <locationX>50</locationX>
+        <locationY>100</locationY>
         <connector><targetReference>EnterDetails</targetReference></connector>
     </start>
     <screens>
         <name>EnterDetails</name>
         <label>Enter Details</label>
+        <locationX>300</locationX>
+        <locationY>200</locationY>
         <fields>
             <name>CompanyField</name>
             <fieldType>ObjectProvided</fieldType>
@@ -17,6 +21,8 @@
         </fields>
         <fields>
             <name>EmailField</name>
+            <dataType>String</dataType>
+            <fieldText>Email</fieldText>
             <fieldType>InputField</fieldType>
         </fields>
         <connector><targetReference>CreateLead</targetReference></connector>
@@ -28,6 +34,9 @@
     </variables>
     <recordCreates>
         <name>CreateLead</name>
+        <label>Create Lead</label>
+        <locationX>300</locationX>
+        <locationY>300</locationY>
         <inputReference>lead</inputReference>
     </recordCreates>
 </Flow>

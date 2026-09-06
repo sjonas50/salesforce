@@ -3,6 +3,11 @@
     <sharingCriteriaRules>
         <fullName>StrategicAccounts</fullName>
         <accessLevel>Read</accessLevel>
+        <accountSettings>
+            <caseAccessLevel>Read</caseAccessLevel>
+            <contactAccessLevel>Read</contactAccessLevel>
+            <opportunityAccessLevel>Read</opportunityAccessLevel>
+        </accountSettings>
         <label>Strategic Accounts</label>
         <sharedTo><group>Strategic_Team</group></sharedTo>
         <criteriaItems>
@@ -14,6 +19,11 @@
     <sharingOwnerRules>
         <fullName>EMEA_To_EMEA</fullName>
         <accessLevel>Edit</accessLevel>
+        <accountSettings>
+            <caseAccessLevel>Edit</caseAccessLevel>
+            <contactAccessLevel>Edit</contactAccessLevel>
+            <opportunityAccessLevel>Edit</opportunityAccessLevel>
+        </accountSettings>
         <label>EMEA to EMEA</label>
         <sharedFrom><role>EMEA_Sales</role></sharedFrom>
         <sharedTo><roleAndSubordinates>EMEA_Sales</roleAndSubordinates></sharedTo>

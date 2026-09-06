@@ -136,3 +136,26 @@ def test_tooling_json_shape_is_accepted() -> None:
     assert out["object"] == "Account"
     assert out["record_updates"][0]["input_assignments"][0]["value"] is True
     assert set(out["references"]["fields"]) == {"Account.Industry", "Account.IsStrategic__c"}
+
+
+def test_flow_values_from_tooling_json_take_first_non_null_key() -> None:
+    """Tooling ``Flow.Metadata`` JSON lists every value key with null for the unused ones."""
+    from offramp.extract.categories.flow import _value
+
+    json_shape = {
+        "apexValue": None,
+        "booleanValue": None,
+        "dateValue": None,
+        "elementReference": "$Record.Id",
+        "numberValue": None,
+        "stringValue": None,
+    }
+    assert _value(json_shape) == {"ref": "$Record.Id"}
+    assert _value({"stringValue": None, "booleanValue": True, "elementReference": None}) is True
+    assert _value({"stringValue": "US", "elementReference": None}) == "US"
+    assert _value({"stringValue": None, "elementReference": None}) is None
+    # XML shape: exactly one key
+    assert _value({"elementReference": "FindTerritory.Owner__c"}) == {
+        "ref": "FindTerritory.Owner__c"
+    }
+    assert _value({"booleanValue": False}) is False

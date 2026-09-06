@@ -4,19 +4,22 @@
         <label>Information</label>
         <layoutColumns>
             <layoutItems><behavior>Required</behavior><field>Name</field></layoutItems>
+            <layoutItems><behavior>Edit</behavior><field>AccountId</field></layoutItems>
+            <layoutItems><behavior>Required</behavior><field>CloseDate</field></layoutItems>
             <layoutItems><behavior>Edit</behavior><field>Amount</field></layoutItems>
             <layoutItems><behavior>Edit</behavior><field>Discount__c</field></layoutItems>
         </layoutColumns>
         <layoutColumns>
-            <layoutItems><behavior>Edit</behavior><field>StageName</field></layoutItems>
+            <layoutItems><behavior>Required</behavior><field>StageName</field></layoutItems>
+            <layoutItems><behavior>Edit</behavior><field>Probability</field></layoutItems>
             <layoutItems><behavior>Edit</behavior><field>Legacy_Notes__c</field></layoutItems>
         </layoutColumns>
+        <style>TwoColumnsTopToBottom</style>
     </layoutSections>
-    <relatedLists>
-        <fields>NAME</fields>
-        <relatedList>RelatedContactRoleList</relatedList>
-    </relatedLists>
     <quickActionList>
         <quickActionListItems><quickActionName>Opportunity.Submit_Discount</quickActionName></quickActionListItems>
     </quickActionList>
+    <relatedLists>
+        <relatedList>RelatedContactRoleList</relatedList>
+    </relatedLists>
 </Layout>

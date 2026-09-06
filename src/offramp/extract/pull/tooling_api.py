@@ -33,7 +33,7 @@ from offramp.core.logging import get_logger
 from offramp.core.models import CategoryName, SchemaSnapshot
 from offramp.extract.dispatch.cmt_reader import CMTRecord
 from offramp.extract.pull.base import RawMetadataRecord
-from offramp.extract.schema import from_describe
+from offramp.extract.schema import from_describe, supplement_from_field_definitions
 
 log = get_logger(__name__)
 
@@ -106,6 +106,7 @@ class ToolingPullStats:
     dependency_rows: int = 0
     dependency_types_capped: list[str] = field(default_factory=list)
     partial_categories: list[str] = field(default_factory=list)
+    metadata_fetch_failures: int = 0
 
 
 class ToolingApiPullClient:
@@ -182,12 +183,14 @@ class ToolingApiPullClient:
     async def cmt_records(self) -> list[CMTRecord]:
         """Every row of every Custom Metadata Type, via REST ``FIELDS(ALL)`` per type."""
         out: list[CMTRecord] = []
+        # ``_`` is a single-character wildcard in SOQL LIKE and EntityDefinition rejects
+        # the ``\_`` escape, so the suffix is confirmed client-side.
         types = await self._tq(
             "SELECT QualifiedApiName FROM EntityDefinition WHERE QualifiedApiName LIKE '%__mdt'"
         )
         for t in types:
             name = str(t.get("QualifiedApiName", ""))
-            if not name:
+            if not name.endswith("__mdt"):
                 continue
             try:
                 rows = (
@@ -271,11 +274,25 @@ class ToolingApiPullClient:
                 self.stats.queries += 1
             except Exception as exc:
                 log.warning("extract.tooling.describe_failed", sobject=n, error=str(exc))
-        return from_describe(
+        snap = from_describe(
             {"sobjects": [s for s in g.get("sobjects", []) if s.get("name") in describes]},
             describes,
             org_alias=self.org_alias,
         )
+        # describe hides fields the running user has no FLS on; FieldDefinition does not.
+        by_object: dict[str, list[dict[str, Any]]] = {}
+        for n in describes:
+            try:
+                # No ``IsCustom`` column; ``EntityDefinitionId`` accepts the API name and
+                # the relationship form (``EntityDefinition.QualifiedApiName``) is rejected.
+                by_object[n] = await self._tq(
+                    "SELECT QualifiedApiName, Label, DataType FROM FieldDefinition "
+                    f"WHERE EntityDefinitionId = '{n}'"
+                )
+            except Exception as exc:
+                log.warning("extract.tooling.field_definition_failed", sobject=n, error=str(exc))
+        supplement_from_field_definitions(snap, by_object)
+        return snap
 
     # ---- per-category pulls ----------------------------------------------------
 
@@ -297,17 +314,35 @@ class ToolingApiPullClient:
             return (await self._custom_object_names()).get(t, t)
         return t
 
-    async def _with_metadata(self, sobject: str, id_fields: str) -> list[dict[str, Any]]:
-        """Tooling ``Metadata`` is only queryable for a single record: list ids, then fetch each."""
+    async def _with_metadata(
+        self, sobject: str, id_fields: str, *, detail_fields: str = "Id, Metadata"
+    ) -> list[dict[str, Any]]:
+        """Tooling ``Metadata`` (and ``FullName``) are only queryable for a single record:
+        list ids, then fetch each."""
         rows = await self._tq(f"SELECT {id_fields} FROM {sobject}")
         out: list[dict[str, Any]] = []
         for r in rows:
             rid = r.get("Id")
             if not rid:
                 continue
-            detail = await self._tq(f"SELECT Id, Metadata FROM {sobject} WHERE Id = '{rid}'")
-            meta = detail[0].get("Metadata") if detail else None
-            out.append({**r, "Metadata": meta if isinstance(meta, dict) else {}})
+            try:
+                detail = await self._tq(f"SELECT {detail_fields} FROM {sobject} WHERE Id = '{rid}'")
+            except Exception as exc:
+                # Salesforce-internal records (e.g. the ``CssDetail`` layout) answer
+                # with HTTP 500; one bad row must not sink the whole category.
+                log.warning(
+                    "extract.tooling.metadata_fetch_failed",
+                    sobject=sobject,
+                    id=rid,
+                    name=r.get("Name") or r.get("DeveloperName"),
+                    error=str(exc)[:200],
+                )
+                self.stats.metadata_fetch_failures += 1
+                continue
+            first = detail[0] if detail else {}
+            meta = first.get("Metadata")
+            extra = {k: v for k, v in first.items() if k not in {"Id", "Metadata", "attributes"}}
+            out.append({**r, **extra, "Metadata": meta if isinstance(meta, dict) else {}})
         return out
 
     async def _tq(self, soql: str) -> list[dict[str, Any]]:
@@ -480,6 +515,9 @@ class ToolingApiPullClient:
             meta = dict(r["Metadata"])
             meta.setdefault("fullName", r.get("Name"))
             bucket(await self._object_name(r.get("TableEnumOrId")))["rules"].append(meta)
+        # The list query has no common name column (WorkflowAlert: DeveloperName,
+        # WorkflowTask: Subject, the rest: Name); ``FullName`` ("Lead.Welcome_Lead_Alert")
+        # is only queryable per record, so it rides along with the Metadata fetch.
         for obj_name, key in (
             ("WorkflowFieldUpdate", "fieldUpdates"),
             ("WorkflowAlert", "alerts"),
@@ -487,7 +525,9 @@ class ToolingApiPullClient:
             ("WorkflowOutboundMessage", "outboundMessages"),
         ):
             try:
-                rows = await self._with_metadata(obj_name, "Id, Name, EntityDefinitionId")
+                rows = await self._with_metadata(
+                    obj_name, "Id, EntityDefinitionId", detail_fields="Id, FullName, Metadata"
+                )
             except Exception as exc:
                 log.warning(
                     "extract.tooling.workflow_action_query_failed", type=obj_name, error=str(exc)
@@ -495,7 +535,8 @@ class ToolingApiPullClient:
                 continue
             for r in rows:
                 meta = dict(r["Metadata"])
-                meta.setdefault("fullName", r.get("Name"))
+                full = str(r.get("FullName") or "")
+                meta.setdefault("fullName", full.split(".", 1)[1] if "." in full else full)
                 bucket(await self._object_name(r.get("EntityDefinitionId")))[key].append(meta)
         return [
             self._rec(
@@ -570,9 +611,14 @@ class ToolingApiPullClient:
         ]
 
     async def _platform_events(self) -> list[RawMetadataRecord]:
-        rows = await self._tq(
-            "SELECT QualifiedApiName, Label, NamespacePrefix FROM EntityDefinition WHERE QualifiedApiName LIKE '%__e'"
-        )
+        # Unescaped ``%__e`` also matches e.g. ``OrderShare`` (see cmt_records).
+        rows = [
+            r
+            for r in await self._tq(
+                "SELECT QualifiedApiName, Label, NamespacePrefix FROM EntityDefinition WHERE QualifiedApiName LIKE '%__e'"
+            )
+            if str(r.get("QualifiedApiName", "")).endswith("__e")
+        ]
         return [
             self._rec(
                 CategoryName.PLATFORM_EVENT,
@@ -651,14 +697,24 @@ class ToolingApiPullClient:
     async def _partial_rules(
         self, cat: CategoryName, tooling_object: str
     ) -> list[RawMetadataRecord]:
+        if tooling_object == "EscalationRule":
+            # No Tooling or REST object exposes escalation rules; the Metadata API
+            # path (sf CLI / source tree) is the only source.
+            log.info("extract.tooling.rule_object_unavailable", type=tooling_object)
+            return []
         try:
-            rows = await self._tq(f"SELECT Id, Name, SobjectType, Active FROM {tooling_object}")
+            # Tooling exposes the owning object as EntityDefinitionId (REST calls it
+            # SobjectType): the API name for standard objects, the 01I id for custom.
+            rows = await self._tq(
+                f"SELECT Id, Name, EntityDefinitionId, Active FROM {tooling_object}"
+            )
         except Exception as exc:
             log.warning("extract.tooling.rule_query_failed", type=tooling_object, error=str(exc))
             return []
         by_obj: dict[str, list[dict[str, Any]]] = {}
         for r in rows:
-            by_obj.setdefault(str(r.get("SobjectType", "")), []).append(
+            obj = await self._object_name(r.get("EntityDefinitionId"))
+            by_obj.setdefault(obj, []).append(
                 {"fullName": r.get("Name", ""), "active": bool(r.get("Active", True))}
             )
         if by_obj:

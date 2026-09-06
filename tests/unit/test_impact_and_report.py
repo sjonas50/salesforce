@@ -172,7 +172,7 @@ def test_summary_numbers(graph: DependencyGraph, run: ExtractRunResult) -> None:
     assert s["test_only_custom_fields"] == 1 and s["empty_custom_fields"] == 3
     assert s["profiled_fields"] == 17 and s["test_classes"] == 1
     assert s["dynamic_apex_classes"] == 2
-    assert s["legacy_automation"] == 3 and s["legacy_active"] == 2
+    assert s["legacy_automation"] == 4 and s["legacy_active"] == 2
     assert s["api_matched"] >= 8 and s["api_only"] >= 1
     assert len(s["edges_by_evidence"]) >= 13
 

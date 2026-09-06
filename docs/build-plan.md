@@ -117,7 +117,16 @@ Complexity legend: **S** ≤ 1 day, **M** 2–5 days, **L** ≥ 1 week. Sequence
 
 E.1 finish OoE runtime steps that real orgs exercise (`runtime/ooe`); E.2 surface "what fires, in what order" in the impact view; E.3 cleanup execution with deploy-backed rollback (Tooling API deactivate, Metadata API deploy); E.4 AppExchange connector listing after revenue.
 
+## Gate A result (2026-09-06)
+
+Run against a fresh Developer Edition (`offramp-scratch`, sf CLI session auth) with the fixture deployed via `scripts/scratch_org.sh deploy`: 651 components across 24 of 26 categories, 5,621 nodes, 13,272 edges over 13 evidence channels, both extraction paths (Tooling/REST and Metadata API) reconciled, zero failed categories, `scripts/verify_xray.py` OK. The two categories without data are expected: `process_builder` (new orgs cannot create processes) and `change_data_capture` (no channel members in a stock org).
+
+The whole X-Ray flow was then driven on that scan: `offramp impact` (where-used, save impact in OoE order, change impact, unused, legacy) answers correctly for fields that describe hides; the HTML report renders all twelve sections (7.6 MB, of which 6.7 MB is the embedded graph — a scaling item for 5K-component orgs); `offramp kg ingest` of the org scan and the fixture scan collapses all 26 shared automations to one entry each, the only separate entries being the two that genuinely differ (auto-response sender email, Process Builder present only in the fixture); `kg search / families / scans / diff / export` work. Both FalkorDB mirrors were then loaded and queried with Cypher (`make falkordb`, no Docker): the X-Ray graph as `offramp-scratch` (5,960 nodes, 16,216 relationships) and the library as `offramp_knowledge`, where `MATCH (p:Process)-[:FOUND_IN]->(o:Org)` returns the 26 processes shared by both orgs. The run surfaced fifteen API behaviours, now CLAUDE.md pitfalls 14 and 17–23.
+
 ## Known limitations (tracked, not yet scheduled)
+
+- The Flow component on Lightning pages (`flowruntime:flowRuntimeForFlexipage`) could not be deployed through the Metadata API in any region or template we tried, so the real-org fixture page carries fields and an LWC only; the page→flow edge is covered by an inline unit test. Build one page in App Builder, retrieve it, and diff to close this.
+- The fixture org is single-user and small: fill rates and record counts are exercised but not representative, and reports shipped by Salesforce are not describable by the API.
 
 - Apex analysis is tokenizer-based: class properties are not typed, `is_sobject_name` uses a fixed standard-object list plus suffix rules, and inner-class references (`Outer.Inner`) resolve only when the outer class is in the corpus. A grammar-backed parser (AD-31) is the fix.
 - `MetadataComponentDependency` rows with no parser evidence become `dependency_api` edges at 0.6 confidence so the report can show them; they are excluded from "live automation" counts but do appear in totals.

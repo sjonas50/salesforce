@@ -5,12 +5,17 @@
     <processType>AutoLaunchedFlow</processType>
     <status>Active</status>
     <start>
+        <locationX>50</locationX>
+        <locationY>100</locationY>
         <object>CaseEscalation__e</object>
         <triggerType>PlatformEvent</triggerType>
         <connector><targetReference>CreateTask</targetReference></connector>
     </start>
     <recordCreates>
         <name>CreateTask</name>
+        <label>Create Task</label>
+        <locationX>300</locationX>
+        <locationY>200</locationY>
         <object>Task</object>
         <inputAssignments>
             <field>Subject</field>

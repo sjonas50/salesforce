@@ -1,18 +1,39 @@
 # Salesforce Off-Ramp — developer workflow targets.
 # All commands run via `uv run` so no pre-activated venv is needed.
 
-.PHONY: help dev sync test test-unit test-integration test-ooe lint lint-fix typecheck smoke clean refresh-fixtures hooks xray-fixture gate
+.PHONY: help dev sync falkordb falkordb-stop test test-unit test-integration test-ooe lint lint-fix typecheck smoke clean refresh-fixtures hooks xray-fixture gate
 
 help:  ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-dev: sync hooks  ## Full developer setup: install deps + git hooks.
+dev: sync hooks falkordb  ## Full developer setup: install deps + git hooks + local FalkorDB.
 
 sync:  ## Install/update Python dependencies.
 	uv sync --all-extras --group dev
 
 hooks:  ## Install pre-commit git hooks.
 	uv run pre-commit install --install-hooks
+
+# FalkorDB without Docker: Redis (brew) + the FalkorDB module from GitHub releases.
+FALKORDB_VERSION ?= v4.20.4
+FALKORDB_DIR ?= $(HOME)/.local/share/offramp
+FALKORDB_SO := $(FALKORDB_DIR)/falkordb.so
+FALKORDB_ASSET := $(shell uname -s | tr A-Z a-z)-$(shell uname -m | sed 's/aarch64/arm64/; s/arm64/arm64v8/; s/x86_64/x64/')
+
+$(FALKORDB_SO):
+	@mkdir -p $(FALKORDB_DIR)
+	curl -fsSL -o $@ https://github.com/FalkorDB/FalkorDB/releases/download/$(FALKORDB_VERSION)/falkordb-$(FALKORDB_ASSET).so
+	chmod +x $@
+
+falkordb: $(FALKORDB_SO)  ## Start FalkorDB (Redis + module) on localhost:6379 in the background.
+	@command -v redis-server >/dev/null || { echo "redis-server missing: brew install redis"; exit 1; }
+	@redis-cli ping >/dev/null 2>&1 && echo "redis already running on 6379" || \
+	  redis-server --port 6379 --loadmodule $(FALKORDB_SO) --daemonize yes --dir $(FALKORDB_DIR) \
+	    --logfile $(FALKORDB_DIR)/redis.log --pidfile $(FALKORDB_DIR)/redis.pid --save "" --appendonly yes
+	@sleep 1; redis-cli GRAPH.LIST >/dev/null && echo "FalkorDB ready (graphs persist in $(FALKORDB_DIR))"
+
+falkordb-stop:  ## Stop the local FalkorDB.
+	@redis-cli shutdown 2>/dev/null || true
 
 test: test-unit  ## Run the default test suite (unit only — fast).
 

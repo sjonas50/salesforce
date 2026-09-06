@@ -56,22 +56,40 @@ _GLOBAL_REF = re.compile(
 )
 
 
+_VALUE_KINDS = (
+    "stringValue",
+    "numberValue",
+    "booleanValue",
+    "dateValue",
+    "dateTimeValue",
+    "apexValue",
+    "sobjectValue",
+    "formulaExpression",
+)
+
+
 def _value(v: Any) -> Any:
-    """Flatten ``{stringValue: X}`` / ``{elementReference: Y}`` value wrappers."""
+    """Flatten ``{stringValue: X}`` / ``{elementReference: Y}`` value wrappers.
+
+    Flow XML carries exactly one key per value; the Tooling API's JSON
+    ``Metadata`` carries *every* key with ``null`` for the unused ones
+    (``{"stringValue": null, "elementReference": "$Record.Id", ...}``), so the
+    first *non-null* key is the value, never the first key present.
+    """
     if isinstance(v, dict):
-        for kind in (
-            "stringValue",
-            "numberValue",
-            "booleanValue",
-            "dateValue",
-            "dateTimeValue",
-            "apexValue",
-            "sobjectValue",
-        ):
-            if kind in v:
-                return v[kind]
-        if "elementReference" in v:
+        for kind in _VALUE_KINDS:
+            if v.get(kind) is not None:
+                val = v[kind]
+                if kind == "booleanValue" and isinstance(val, str):
+                    # XML says "true"; the Tooling JSON says true. One identity.
+                    return val.strip().lower() == "true"
+                return val
+        if v.get("elementReference") is not None:
             return {"ref": v["elementReference"]}
+        if any(v.get(k) is not None for k in ("collectionElements", "complexValue")):
+            return {k: v[k] for k in ("collectionElements", "complexValue") if v.get(k) is not None}
+        if all(val is None or val == [] for val in v.values()):
+            return None
         return v
     return v
 
@@ -179,9 +197,16 @@ def _element(kind: str, el: dict[str, Any]) -> dict[str, Any]:
         out["flow_name"] = as_str(el.get("flowName"))
         out["inputs"] = _assignments(el.get("inputAssignments"), key="name")
     elif kind == "screens":
+        # Salesforce drops the ``name`` of ObjectProvided screen fields on save; the
+        # object field reference is their identity on both sides.
         out["fields"] = [
             {
-                "name": as_str(f.get("name")),
+                "name": (
+                    as_str(f.get("objectFieldReference"))
+                    if as_str(f.get("fieldType")) == "ObjectProvided"
+                    and as_str(f.get("objectFieldReference"))
+                    else as_str(f.get("name"))
+                ),
                 "type": as_str(f.get("fieldType")),
                 "extension": as_str(f.get("extensionName")),
                 "object_field": as_str(f.get("objectFieldReference")),

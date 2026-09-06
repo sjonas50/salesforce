@@ -67,7 +67,10 @@ class EscalationRuleExtractor(CategoryExtractor):
                         "notify_to": as_str(a.get("notifyTo")),
                         "notify_email": as_str(a.get("notifyEmail")),
                         "template": as_str(
-                            a.get("notifyCaseOwnerTemplate") or a.get("notifyTemplate")
+                            a.get("assignedToTemplate")
+                            or a.get("notifyToTemplate")
+                            or a.get("notifyCaseOwnerTemplate")
+                            or a.get("notifyTemplate")
                         ),
                     }
                     for a in as_list(e.get("escalationAction"))

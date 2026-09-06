@@ -5,6 +5,8 @@
     <processType>AutoLaunchedFlow</processType>
     <status>Active</status>
     <start>
+        <locationX>50</locationX>
+        <locationY>100</locationY>
         <object>Lead</object>
         <triggerType>RecordAfterSave</triggerType>
         <recordTriggerType>CreateAndUpdate</recordTriggerType>
@@ -20,17 +22,21 @@
     <formulas>
         <name>IsEnterprise</name>
         <dataType>Boolean</dataType>
-        <expression>{!$Record.AnnualRevenue} &gt; 5000000 &amp;&amp; NOT(ISBLANK({!$Record.Industry}))</expression>
+        <expression>{!$Record.AnnualRevenue} &gt; 5000000 &amp;&amp; NOT(ISBLANK(TEXT({!$Record.Industry})))</expression>
     </formulas>
     <variables>
         <name>scoreOut</name>
         <dataType>Number</dataType>
         <isCollection>false</isCollection>
+        <scale>0</scale>
     </variables>
     <decisions>
         <name>RouteByCountry</name>
         <label>Route By Country</label>
+        <locationX>300</locationX>
+        <locationY>200</locationY>
         <defaultConnector><targetReference>ScoreLead</targetReference></defaultConnector>
+        <defaultConnectorLabel>Default Outcome</defaultConnectorLabel>
         <rules>
             <name>IsUS</name>
             <conditionLogic>and</conditionLogic>
@@ -49,6 +55,9 @@
     </decisions>
     <recordLookups>
         <name>FindTerritory</name>
+        <label>Find Territory</label>
+        <locationX>300</locationX>
+        <locationY>300</locationY>
         <object>Territory__c</object>
         <filterLogic>and</filterLogic>
         <filters>
@@ -63,6 +72,9 @@
     </recordLookups>
     <recordUpdates>
         <name>AssignOwner</name>
+        <label>Assign Owner</label>
+        <locationX>300</locationX>
+        <locationY>400</locationY>
         <inputReference>$Record</inputReference>
         <inputAssignments>
             <field>OwnerId</field>
@@ -76,6 +88,9 @@
     </recordUpdates>
     <actionCalls>
         <name>ScoreLead</name>
+        <label>Score Lead</label>
+        <locationX>300</locationX>
+        <locationY>500</locationY>
         <actionName>LeadScoringService</actionName>
         <actionType>apex</actionType>
         <inputParameters>
@@ -86,6 +101,9 @@
     </actionCalls>
     <subflows>
         <name>NotifyOwner</name>
+        <label>Notify Owner</label>
+        <locationX>300</locationX>
+        <locationY>600</locationY>
         <flowName>SendWelcomeEmail</flowName>
         <inputAssignments>
             <name>recordId</name>

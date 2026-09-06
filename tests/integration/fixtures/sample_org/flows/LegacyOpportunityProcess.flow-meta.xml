@@ -5,6 +5,8 @@
     <processType>Workflow</processType>
     <status>Active</status>
     <start>
+        <locationX>50</locationX>
+        <locationY>100</locationY>
         <object>Opportunity</object>
         <triggerType>RecordAfterSave</triggerType>
         <connector><targetReference>StageGate</targetReference></connector>
@@ -12,8 +14,12 @@
     <decisions>
         <name>StageGate</name>
         <label>Stage Gate</label>
+        <locationX>300</locationX>
+        <locationY>200</locationY>
+        <defaultConnectorLabel>Default Outcome</defaultConnectorLabel>
         <rules>
             <name>ClosedWon</name>
+            <conditionLogic>and</conditionLogic>
             <conditions>
                 <leftValueReference>$Record.StageName</leftValueReference>
                 <operator>EqualTo</operator>
@@ -24,6 +30,9 @@
     </decisions>
     <recordUpdates>
         <name>ClearDiscount</name>
+        <label>Clear Discount</label>
+        <locationX>300</locationX>
+        <locationY>300</locationY>
         <inputReference>$Record</inputReference>
         <inputAssignments>
             <field>Discount__c</field>

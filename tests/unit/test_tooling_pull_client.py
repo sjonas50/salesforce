@@ -123,7 +123,9 @@ def _backend() -> InMemorySalesforceBackend:
         "LightningComponentBundle": [],
         "PlatformEventChannelMember": [],
         "ProcessDefinition": [],
-        "AssignmentRule": [{"Id": "01Q9", "Name": "Route", "SobjectType": "Lead", "Active": True}],
+        "AssignmentRule": [
+            {"Id": "01Q9", "Name": "Route", "EntityDefinitionId": "Lead", "Active": True}
+        ],
         "EscalationRule": [],
         "AutoResponseRule": [],
         "SharingRules": [],

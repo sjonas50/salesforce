@@ -207,10 +207,16 @@ class SimpleSalesforceBackend:
             raise JWTAuthError(f"Metadata API retrieve was not accepted (state={state})")
         waited = 0.0
         while True:
-            state, _msg, _files, blob = await loop.run_in_executor(
-                None, lambda: mdapi.retrieve_zip(async_id)
+            # ``retrieve_zip`` base64-decodes the payload unconditionally and blows up
+            # while the job is still Pending/InProgress (no ``zipFile`` yet): poll the
+            # status first and fetch the ZIP exactly once.
+            state, _msg, _files = await loop.run_in_executor(
+                None, lambda: mdapi.check_retrieve_status(async_id)
             )
             if state == "Succeeded":
+                _state, _msg, _files, blob = await loop.run_in_executor(
+                    None, lambda: mdapi.retrieve_zip(async_id)
+                )
                 return bytes(blob)
             if state in {"Failed", "Error"}:
                 raise RuntimeError(f"Metadata API retrieve {async_id} failed: {_msg}")

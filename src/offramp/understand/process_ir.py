@@ -99,6 +99,13 @@ def build_process(
 # ---- helpers ----------------------------------------------------------------------
 
 
+def _approver_name(a: dict[str, Any]) -> str:
+    name = str(a.get("name") or "")
+    if not name and a.get("type") == "userHierarchyField":
+        return "Manager"
+    return name
+
+
 def _qualify(obj: str | None, f: str) -> str:
     return f if "." in f or not obj else f"{obj}.{f}"
 
@@ -201,19 +208,25 @@ def _from_flow(c: Component, raw: dict[str, Any]) -> ProcessDefinition:
         steps.append(s)
     for c_ in trigger.when.conditions:
         reads.update(f for f in [c_.left] if f and "." in f and not f.startswith("$"))
-    variables = [
-        Variable(
-            name=v["name"],
-            type=v.get("data_type", ""),
-            object=v.get("object_type") or None,
-            is_input=bool(v.get("is_input")),
-            is_output=bool(v.get("is_output")),
-        )
-        for v in raw.get("resources", {}).get("variables", [])
-    ] + [
-        Variable(name=f["name"], type="formula", expression=f.get("expression"))
-        for f in raw.get("resources", {}).get("formulas", [])
-    ]
+    # Sorted by name: the Tooling JSON and the XML list resources in different orders,
+    # and order is not part of a flow's meaning.
+    variables = sorted(
+        [
+            Variable(
+                name=v["name"],
+                type=v.get("data_type", ""),
+                object=v.get("object_type") or None,
+                is_input=bool(v.get("is_input")),
+                is_output=bool(v.get("is_output")),
+            )
+            for v in raw.get("resources", {}).get("variables", [])
+        ]
+        + [
+            Variable(name=f["name"], type="formula", expression=f.get("expression"))
+            for f in raw.get("resources", {}).get("formulas", [])
+        ],
+        key=lambda v: v.name,
+    )
     return ProcessDefinition(
         name=c.api_name or c.name,
         label=str(raw.get("label") or c.name),
@@ -769,10 +782,15 @@ def _from_approval(c: Component, raw: dict[str, Any]) -> list[ProcessDefinition]
             label=s.get("label", ""),
             object=obj,
             when=swhen if not swhen.empty else None,
-            target=", ".join(f"{a.get('type')}:{a.get('name')}" for a in s.get("approvers", [])),
+            target=", ".join(
+                f"{a.get('type')}:{_approver_name(a)}" for a in s.get("approvers", [])
+            ),
             extras={
-                "when_multiple": s.get("when_multiple", ""),
-                "reject": s.get("reject_behavior", ""),
+                # Salesforce strips defaulted values on save (a userHierarchyField approver
+                # is 'Manager', one approver needs no whenMultipleApprovers, a first step
+                # rejects the request); fill them so authored and retrieved copies match.
+                "when_multiple": s.get("when_multiple") or "FirstResponse",
+                "reject": s.get("reject_behavior") or "RejectRequest",
                 "if_criteria_not_met": s.get("if_criteria_not_met", ""),
                 "approval_actions": s.get("approval_actions", []),
                 "rejection_actions": s.get("rejection_actions", []),

@@ -5,6 +5,8 @@
     <processType>Orchestrator</processType>
     <status>Active</status>
     <start>
+        <locationX>50</locationX>
+        <locationY>100</locationY>
         <object>Case</object>
         <triggerType>RecordAfterSave</triggerType>
         <recordTriggerType>Create</recordTriggerType>
@@ -13,9 +15,13 @@
     <orchestratedStages>
         <name>Triage</name>
         <label>Triage</label>
+        <locationX>300</locationX>
+        <locationY>200</locationY>
         <stageSteps>
             <name>AssignAgent</name>
             <label>Assign Agent</label>
+            <actionName>SendWelcomeEmail</actionName>
+            <actionType>stepBackground</actionType>
         </stageSteps>
     </orchestratedStages>
 </Flow>

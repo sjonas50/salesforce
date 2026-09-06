@@ -14,6 +14,7 @@ or multi-select picklist fields; those are skipped and reported as unknown.
 from __future__ import annotations
 
 import contextlib
+import re
 from datetime import datetime
 from typing import Any
 
@@ -22,21 +23,28 @@ from offramp.core.models import DataProfile, FieldProfile, ObjectProfile, Schema
 
 log = get_logger(__name__)
 
+# Compared case-insensitively: describe says ``textarea``/``boolean``, the
+# metadata snapshot says ``TextArea``/``Checkbox``.
 _UNAGGREGATABLE_TYPES = {
-    "LongTextArea",
-    "Html",
-    "RichTextArea",
-    "EncryptedText",
-    "MultiselectPicklist",
-    "Location",
-    "Address",
-    "textarea",
-    "base64",
-    "encryptedstring",
-    "multipicklist",
-    "address",
-    "location",
+    t.lower()
+    for t in (
+        "LongTextArea",
+        "TextArea",
+        "Html",
+        "RichTextArea",
+        "EncryptedText",
+        "MultiselectPicklist",
+        "Location",
+        "Address",
+        "Checkbox",
+        "boolean",
+        "textarea",
+        "base64",
+        "encryptedstring",
+        "multipicklist",
+    )
 }
+_UNSUPPORTED_RE = re.compile(r"field (\w+) does not support aggregate operator")
 _SKIP_OBJECT_SUFFIXES = ("__mdt", "__e", "__b", "__x", "Share", "History", "Feed", "ChangeEvent")
 
 
@@ -86,19 +94,37 @@ async def profile_from_gateway(
         op = ObjectProfile(object_name=obj, record_count=counts.get(obj))
         prof.objects[obj] = op
         aggregatable = [
-            f for f in by_object[obj] if (f.field_type or "") not in _UNAGGREGATABLE_TYPES
+            f for f in by_object[obj] if (f.field_type or "").lower() not in _UNAGGREGATABLE_TYPES
         ]
         for i in range(0, len(aggregatable), fields_per_query):
             chunk = aggregatable[i : i + fields_per_query]
-            selects = ", ".join(
-                f"COUNT({f.api_name.split('.', 1)[1]}) c{k}" for k, f in enumerate(chunk)
-            )
-            soql = f"SELECT COUNT(Id) total, MAX(LastModifiedDate) lm, {selects} FROM {obj}"
-            try:
-                resp = await gateway.sf_query(soql)
-            except Exception as exc:  # one failing object must not sink the profile
-                op.error = str(exc)[:200]
-                log.warning("extract.data_profile.aggregate_failed", sobject=obj, error=str(exc))
+            resp = None
+            for _attempt in range(len(chunk) + 1):
+                selects = ", ".join(
+                    f"COUNT({f.api_name.split('.', 1)[1]}) c{k}" for k, f in enumerate(chunk)
+                )
+                soql = f"SELECT COUNT(Id) total, MAX(LastModifiedDate) lm, {selects} FROM {obj}"
+                try:
+                    resp = await gateway.sf_query(soql)
+                    break
+                except Exception as exc:  # one failing object must not sink the profile
+                    # Salesforce names the field it refuses to COUNT; drop it and retry so
+                    # a type this list does not know about costs one field, not the object.
+                    m = _UNSUPPORTED_RE.search(str(exc))
+                    bad = m.group(1) if m else None
+                    if bad and any(f.api_name.split(".", 1)[1] == bad for f in chunk):
+                        log.info(
+                            "extract.data_profile.field_unaggregatable", sobject=obj, field=bad
+                        )
+                        chunk = [f for f in chunk if f.api_name.split(".", 1)[1] != bad]
+                        if chunk:
+                            continue
+                    op.error = str(exc)[:200]
+                    log.warning(
+                        "extract.data_profile.aggregate_failed", sobject=obj, error=str(exc)
+                    )
+                    break
+            if resp is None:
                 break
             rows = resp.get("records") or []
             if not rows:

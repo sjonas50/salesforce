@@ -235,6 +235,80 @@ def _describe_type(f: dict[str, Any]) -> str:
     }.get(t, t)
 
 
+_FIELD_DEFINITION_TYPES = {
+    "Text": "Text",
+    "Text Area": "TextArea",
+    "Long Text Area": "LongTextArea",
+    "Rich Text Area": "Html",
+    "Number": "Number",
+    "Currency": "Currency",
+    "Percent": "Percent",
+    "Checkbox": "Checkbox",
+    "Date": "Date",
+    "Date/Time": "DateTime",
+    "Picklist": "Picklist",
+    "Picklist (Multi-Select)": "MultiselectPicklist",
+    "Email": "Email",
+    "Phone": "Phone",
+    "URL": "Url",
+    "Auto Number": "AutoNumber",
+    "Roll-Up Summary": "Summary",
+    "Lookup": "Lookup",
+    "Master-Detail": "MasterDetail",
+    "Formula": "Formula",
+}
+
+
+def _field_definition_type(data_type: str) -> tuple[str, list[str]]:
+    """``"Lookup(Territory)"`` → ``("Lookup", ["Territory"])``; ``"Formula (Number)"`` → ``("Formula", [])``."""
+    base, _, rest = data_type.partition("(")
+    base = base.strip()
+    inner = rest.rstrip(")").strip()
+    refs = [inner] if base in {"Lookup", "Master-Detail"} and inner else []
+    return _FIELD_DEFINITION_TYPES.get(base, base or "Unknown"), refs
+
+
+def supplement_from_field_definitions(
+    snap: SchemaSnapshot, rows_by_object: dict[str, list[dict[str, Any]]]
+) -> int:
+    """Add fields that ``describe`` hid.
+
+    REST ``describe`` only lists fields the running user has field-level
+    security on; a field deployed through the Metadata API has no FLS for
+    anyone until a profile or permission set grants it, so it is invisible to
+    describe yet fully live for automation. Tooling ``FieldDefinition`` ignores
+    FLS. Rows are ``SELECT QualifiedApiName, Label, DataType, IsCustom ...``;
+    returns the number of fields added.
+    """
+    known = {n.api_name for n in snap.nodes if n.kind == SchemaNodeKind.FIELD}
+    added = 0
+    for obj, rows in rows_by_object.items():
+        for r in rows:
+            fname = as_str(r.get("QualifiedApiName"))
+            api = f"{obj}.{fname}"
+            if not fname or api in known:
+                continue
+            ftype, refs = _field_definition_type(as_str(r.get("DataType")))
+            snap.nodes.append(
+                SchemaNode(
+                    org_alias=snap.org_alias,
+                    kind=SchemaNodeKind.FIELD,
+                    api_name=api,
+                    object_name=obj,
+                    label=as_str(r.get("Label"), fname),
+                    field_type=ftype,
+                    reference_to=refs,
+                    custom=bool(r.get("IsCustom", fname.endswith("__c"))),
+                    raw={"source": "field_definition", "hidden_from_describe": True},
+                )
+            )
+            known.add(api)
+            added += 1
+    if added:
+        log.info("extract.schema.field_definitions", added=added)
+    return added
+
+
 def merge(primary: SchemaSnapshot, secondary: SchemaSnapshot) -> SchemaSnapshot:
     """Union two snapshots; ``primary`` wins on conflicts."""
     out = SchemaSnapshot(org_alias=primary.org_alias, source=f"{primary.source}+{secondary.source}")

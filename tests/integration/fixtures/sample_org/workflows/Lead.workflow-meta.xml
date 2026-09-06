@@ -2,6 +2,7 @@
 <Workflow xmlns="http://soap.sforce.com/2006/04/metadata">
     <alerts>
         <fullName>Welcome_Lead_Alert</fullName>
+        <description>Welcome email to the lead owner</description>
         <recipients><type>owner</type></recipients>
         <senderType>DefaultWorkflowUser</senderType>
         <template>unfiled$public/Welcome_Lead</template>
