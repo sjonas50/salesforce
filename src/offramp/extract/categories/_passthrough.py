@@ -1,99 +1,40 @@
-"""Passthrough extractors for categories awaiting full implementation.
+"""Passthrough extractor for categories with no category-specific shape.
 
-Each one parses the XML payload via the shared utility but does not yet apply
-category-specific field normalization. They satisfy the
-:class:`CategoryExtractor` contract so the orchestrator + coverage audit work
-end-to-end against the fixture org while the per-category translator backlog
-is filled in.
-
-Adding the real semantic shape for one of these is a focused change: pick the
-class, replace ``parse_payload`` with the canonical mapping (compare to
-:mod:`offramp.extract.categories.validation_rule` for the pattern), and add a
-fixture exercising the new fields.
+Only Change Data Capture remains a passthrough: its "metadata" is a JSON
+subscription list, not XML. Every other category has a real extractor.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any, ClassVar
 
 from offramp.core.models import CategoryName
 from offramp.extract.categories.base import CategoryExtractor, register
-from offramp.extract.categories.xml_utils import parse_xml
 from offramp.extract.pull.reconciler import ReconciledRecord
 
 
-class _XmlPassthroughExtractor(CategoryExtractor):
-    """Parse XML to dict; record the file path; flag as ``passthrough=True``.
-
-    The ``passthrough`` flag is consumed by the coverage audit to surface
-    "category extracted but not yet semantically normalized" as a known gap
-    rather than a silent loss.
-    """
-
-    def parse_payload(self, record: ReconciledRecord) -> dict[str, Any]:
-        raw = record.payload.get("raw_xml", "")
-        parsed: dict[str, Any] = {}
-        if raw:
-            try:
-                parsed = parse_xml(raw)
-            except Exception as exc:
-                parsed = {"_parse_error": str(exc)}
-        return {
-            "passthrough": True,
-            "path": record.payload.get("path"),
-            "parsed_xml": parsed,
-        }
-
-
 @register
-class ApexClassExtractor(_XmlPassthroughExtractor):
-    category: ClassVar[CategoryName] = CategoryName.APEX_CLASS
-
-
-@register
-class ApprovalProcessExtractor(_XmlPassthroughExtractor):
-    category: ClassVar[CategoryName] = CategoryName.APPROVAL_PROCESS
-
-
-@register
-class AutoResponseRuleExtractor(_XmlPassthroughExtractor):
-    category: ClassVar[CategoryName] = CategoryName.AUTO_RESPONSE_RULE
-
-
-@register
-class EscalationRuleExtractor(_XmlPassthroughExtractor):
-    category: ClassVar[CategoryName] = CategoryName.ESCALATION_RULE
-
-
-@register
-class SharingRuleExtractor(_XmlPassthroughExtractor):
-    category: ClassVar[CategoryName] = CategoryName.SHARING_RULE
-
-
-@register
-class RollupSummaryExtractor(_XmlPassthroughExtractor):
-    category: ClassVar[CategoryName] = CategoryName.ROLLUP_SUMMARY
-
-
-@register
-class PlatformEventExtractor(_XmlPassthroughExtractor):
-    category: ClassVar[CategoryName] = CategoryName.PLATFORM_EVENT
-
-
-@register
-class ChangeDataCaptureExtractor(_XmlPassthroughExtractor):
-    """CDC subscriptions are JSON, not XML — handled by special-case parser.
-
-    The fixture client stores the JSON dump under ``payload['raw_xml']`` for
-    interface uniformity; the parse_xml call will fail and the parse_error
-    field carries the diagnostic.
-    """
+class ChangeDataCaptureExtractor(CategoryExtractor):
+    """CDC subscriptions: ``_tooling/cdc_subscriptions.json`` or a PlatformEventChannel."""
 
     category: ClassVar[CategoryName] = CategoryName.CHANGE_DATA_CAPTURE
+    is_passthrough: ClassVar[bool] = True
 
-
-# LWC bundles get their own real extractor in extract.lwc — register a tiny
-# adapter here so the dispatch table is complete.
-from offramp.extract.lwc.bundle import LWCBundleExtractor  # noqa: E402
-
-register(LWCBundleExtractor)
+    def parse_payload(self, record: ReconciledRecord) -> dict[str, Any]:
+        raw = record.payload.get("raw_xml") or record.payload.get("raw_json") or ""
+        parsed: dict[str, Any] = {}
+        if isinstance(raw, str) and raw.strip().startswith("{"):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                parsed = {"_parse_error": str(exc)}
+        elif isinstance(record.payload.get("parsed"), dict):
+            parsed = record.payload["parsed"]
+        objects = [str(o) for o in parsed.get("subscribed_objects", []) if isinstance(o, str)]
+        return {
+            "path": record.payload.get("path"),
+            "channel": parsed.get("channel", "/data/ChangeEvents"),
+            "subscribed_objects": objects,
+            "references": {"objects": objects},
+        }

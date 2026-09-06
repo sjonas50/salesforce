@@ -158,6 +158,37 @@ class SimpleSalesforceBackend:
         obj = getattr(sf, sobject)
         return await loop.run_in_executor(None, obj.describe)
 
+    async def describe_global(self) -> dict[str, Any]:
+        await self._charge_quota()
+        sf = await self.connect()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, sf.describe)
+
+    async def tooling_query(self, soql: str) -> dict[str, Any]:
+        """Tooling API query with ``nextRecordsUrl`` pagination folded in."""
+        await self._charge_quota()
+        sf = await self.connect()
+        loop = asyncio.get_running_loop()
+        from urllib.parse import quote
+
+        first = await loop.run_in_executor(None, sf.toolingexecute, f"query/?q={quote(soql)}")
+        records = list(first.get("records", []))
+        nxt = first.get("nextRecordsUrl")
+        while nxt:
+            await self._charge_quota()
+            # nextRecordsUrl is absolute (/services/data/vXX/tooling/query/01g...); toolingexecute wants the tail.
+            tail = nxt.split("/tooling/", 1)[1] if "/tooling/" in nxt else nxt
+            page = await loop.run_in_executor(None, sf.toolingexecute, tail)
+            records.extend(page.get("records", []))
+            nxt = page.get("nextRecordsUrl")
+        return {"totalSize": len(records), "done": True, "records": records}
+
+    async def restful(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        await self._charge_quota()
+        sf = await self.connect()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: sf.restful(path, params))
+
 
 # JWT exchange now lives in offramp.mcp.jwt_auth. The old ``_jwt_session_id``
 # hook was replaced by :class:`SessionCache` which handles signing, exchange,

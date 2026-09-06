@@ -3,5 +3,15 @@
     <autoResponseRule>
         <fullName>WelcomeNewLead</fullName>
         <active>true</active>
+        <ruleEntry>
+            <criteriaItems>
+                <field>Lead.LeadSource</field>
+                <operation>equals</operation>
+                <value>Web</value>
+            </criteriaItems>
+            <senderEmail>sales@example.com</senderEmail>
+            <senderName>Sales Team</senderName>
+            <template>unfiled$public/Web_Lead_Auto_Reply</template>
+        </ruleEntry>
     </autoResponseRule>
 </AutoResponseRules>

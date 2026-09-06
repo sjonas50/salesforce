@@ -3,5 +3,19 @@
     <sharingCriteriaRules>
         <fullName>StrategicAccounts</fullName>
         <accessLevel>Read</accessLevel>
+        <label>Strategic Accounts</label>
+        <sharedTo><group>Strategic_Team</group></sharedTo>
+        <criteriaItems>
+            <field>IsStrategic__c</field>
+            <operation>equals</operation>
+            <value>True</value>
+        </criteriaItems>
     </sharingCriteriaRules>
+    <sharingOwnerRules>
+        <fullName>EMEA_To_EMEA</fullName>
+        <accessLevel>Edit</accessLevel>
+        <label>EMEA to EMEA</label>
+        <sharedFrom><role>EMEA_Sales</role></sharedFrom>
+        <sharedTo><roleAndSubordinates>EMEA_Sales</roleAndSubordinates></sharedTo>
+    </sharingOwnerRules>
 </SharingRules>

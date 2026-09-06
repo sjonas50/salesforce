@@ -1,9 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Flow xmlns="http://soap.sforce.com/2006/04/metadata">
     <apiVersion>66.0</apiVersion>
+    <label>Case Triage Orchestration</label>
     <processType>Orchestrator</processType>
     <status>Active</status>
-    <stages>
-        <name>InitialReview</name>
-    </stages>
+    <start>
+        <object>Case</object>
+        <triggerType>RecordAfterSave</triggerType>
+        <recordTriggerType>Create</recordTriggerType>
+        <connector><targetReference>Triage</targetReference></connector>
+    </start>
+    <orchestratedStages>
+        <name>Triage</name>
+        <label>Triage</label>
+        <stageSteps>
+            <name>AssignAgent</name>
+            <label>Assign Agent</label>
+        </stageSteps>
+    </orchestratedStages>
 </Flow>

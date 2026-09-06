@@ -46,6 +46,11 @@ class JSAnalysis:
 
 
 _APEX_IMPORT_RE = re.compile(r"""@salesforce/apex/([A-Za-z0-9_]+\.[A-Za-z0-9_]+)""")
+_SCHEMA_IMPORT_RE = re.compile(r"""@salesforce/schema/([A-Za-z0-9_]+(?:\.[A-Za-z0-9_.]+)?)""")
+_LABEL_IMPORT_RE = re.compile(r"""@salesforce/label/([A-Za-z0-9_.]+)""")
+_UI_API_FIELDS_RE = re.compile(r"""fields\s*:\s*\[([^\]]*)\]""")
+_HTML_RECORD_FORM_RE = re.compile(r"""object-api-name\s*=\s*["']([A-Za-z0-9_]+)["']""")
+_HTML_FIELD_RE = re.compile(r"""field-name\s*=\s*["']([A-Za-z0-9_]+)["']""")
 _WIRE_RE = re.compile(r"@wire\s*\(")
 _IMPERATIVE_APEX_RE = re.compile(r"\b[A-Za-z_]\w*\s*\(\s*\{[^}]*\}\s*\)\s*\.then\b")
 _FETCH_RE = re.compile(r"\bfetch\s*\(")
@@ -95,6 +100,13 @@ class LWCBundleExtractor(CategoryExtractor):
         ]
         if not analyses:
             return {
+                "references": {
+                    "apex_classes": [],
+                    "apex_methods": [],
+                    "objects": [],
+                    "fields": [],
+                    "custom_labels": [],
+                },
                 "files": list(files.keys()),
                 "classification": LWCClassification.UI_ONLY.value,
                 "apex_imports": [],
@@ -108,7 +120,28 @@ class LWCBundleExtractor(CategoryExtractor):
         }
         worst = max(analyses, key=lambda a: order[a.classification]).classification
         all_imports = sorted({imp for a in analyses for imp in a.apex_imports})
+        js_sources = "\n".join(v for k, v in files.items() if k.endswith(".js"))
+        html_sources = "\n".join(v for k, v in files.items() if k.endswith(".html"))
+        schema_refs = sorted(set(_SCHEMA_IMPORT_RE.findall(js_sources)))
+        objects = sorted(
+            {r.split(".", 1)[0] for r in schema_refs}
+            | set(_HTML_RECORD_FORM_RE.findall(html_sources))
+        )
+        fields = sorted(r for r in schema_refs if "." in r)
+        # <lightning-record-form object-api-name="Lead"> + field-name="Email"
+        html_objs = _HTML_RECORD_FORM_RE.findall(html_sources)
+        if len(html_objs) == 1:
+            fields = sorted(
+                set(fields) | {f"{html_objs[0]}.{f}" for f in _HTML_FIELD_RE.findall(html_sources)}
+            )
         return {
+            "references": {
+                "apex_classes": sorted({imp.split(".", 1)[0] for imp in all_imports}),
+                "apex_methods": all_imports,
+                "objects": objects,
+                "fields": fields,
+                "custom_labels": sorted(set(_LABEL_IMPORT_RE.findall(js_sources))),
+            },
             "files": sorted(files.keys()),
             "classification": worst.value,
             "apex_imports": all_imports,

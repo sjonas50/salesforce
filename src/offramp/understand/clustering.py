@@ -1,141 +1,171 @@
-"""Leiden clustering on the Component dependency graph.
+"""Community detection on the dependency graph → BusinessProcess clusters.
 
-The architecture (v2.1 §8.2) uses Leiden clustering with a tunable resolution
-parameter. networkx ships ``louvain_communities``; the Leiden variant lives in
-``networkx-graph-tool`` extensions which add a heavy native dep. For Phase 2
-we use Louvain — the algorithmic family is the same and the resolution
-parameter behaves the same way. The cluster IDs are stored back as
-:class:`BusinessProcess` nodes in FalkorDB.
+Louvain (networkx) by default; Leiden when ``leidenalg`` + ``igraph`` are
+installed and ``algorithm="leiden"`` is requested. Both take a resolution
+parameter. Schema nodes participate so a process cluster naturally gathers
+the objects and fields its automation shares; external nodes (templates,
+labels) are excluded so they don't glue unrelated processes together.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import networkx as nx
 from networkx.algorithms.community import louvain_communities
 
 from offramp.core.logging import get_logger
-from offramp.core.models import Component
-from offramp.extract.dispatch.class_resolver import DispatchEdge
-from offramp.understand.graph_loader import GraphHandle
+from offramp.understand.dependencies import DependencyGraph
 
 log = get_logger(__name__)
+
+_EDGE_WEIGHT = {"calls": 3.0, "dispatches": 3.0, "triggers": 2.0, "owns": 2.0, "references": 1.0}
 
 
 @dataclass
 class BusinessProcess:
-    """One detected cluster of related components."""
+    """One detected cluster of related components + the data they share."""
 
-    process_id: str  # 'bp_<index>'
-    label: str  # auto-derived from member categories
+    process_id: str
+    label: str
     component_ids: list[str]
+    object_names: list[str] = field(default_factory=list)
+    field_ids: list[str] = field(default_factory=list)
+    categories: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def size(self) -> int:
+        return len(self.component_ids)
 
 
-def build_networkx_graph(
-    components: list[Component],
-    dispatch_edges: list[DispatchEdge],
-    *,
-    components_by_name: dict[str, str],
-) -> nx.Graph:
-    """Project the FalkorDB graph into a networkx graph for clustering.
-
-    Edges:
-
-    * Apex Trigger ↔ Apex Class (regex from dispatch + LWC import linkage)
-    * LWC Bundle ↔ Apex Class (from Phase 1 LWC analyzer)
-    * CMT-resolved DISPATCHES edges (treat the dispatcher CMT as a virtual
-      hub node so cluster membership flows through it)
-    """
+def build_networkx_graph(dep: DependencyGraph, *, include_schema: bool = True) -> nx.Graph:
     g = nx.Graph()
-    by_id = {str(c.id): c for c in components}
-    for c in components:
+    for n in dep.nodes.values():
+        if n.kind == "external":
+            continue
+        if not include_schema and n.kind != "component":
+            continue
         g.add_node(
-            str(c.id),
-            category=c.category.value,
-            name=c.name,
-            api_name=c.api_name or c.name,
+            n.id,
+            kind=n.kind,
+            category=n.category,
+            name=n.name,
+            api_name=n.api_name,
+            object_name=n.object_name or "",
         )
-
-    # LWC -> Apex edges
-    for c in components:
-        if c.category.value != "lwc_bundle":
-            continue
-        imports = c.raw.get("apex_imports", []) if isinstance(c.raw, dict) else []
-        for imp in imports:
-            if not isinstance(imp, str):
-                continue
-            class_name = imp.split(".", 1)[0]
-            target_id = components_by_name.get(class_name)
-            if target_id and target_id in by_id:
-                g.add_edge(str(c.id), target_id, kind="calls")
-
-    # Dispatch edges via virtual CMT hub nodes
-    for e in dispatch_edges:
-        target_id = components_by_name.get(e.handler_class)
-        if not target_id:
-            continue
-        hub = f"cmt:{e.dispatcher_cmt}"
-        g.add_node(hub, category="dispatch_hub", name=e.dispatcher_cmt, api_name=e.dispatcher_cmt)
-        g.add_edge(hub, target_id, kind="dispatches", weight=e.confidence)
-
+    for e in dep.edges:
+        s, t = str(e.source_id), str(e.target_id)
+        if s in g and t in g:
+            w = _EDGE_WEIGHT.get(e.kind.value, 1.0) * e.confidence
+            if g.has_edge(s, t):
+                g[s][t]["weight"] += w
+            else:
+                g.add_edge(s, t, weight=w, kind=e.kind.value)
     return g
 
 
-def detect_processes(g: nx.Graph, *, resolution: float = 1.0) -> list[BusinessProcess]:
-    """Run Louvain (Leiden-family) community detection.
-
-    ``resolution`` higher → more, smaller clusters; lower → fewer, bigger.
-    Default 1.0 matches networkx's Louvain default.
-    """
+def detect_processes(
+    g: nx.Graph, *, resolution: float = 1.0, algorithm: str = "louvain", seed: int = 42
+) -> list[BusinessProcess]:
     if g.number_of_nodes() == 0:
         return []
-    # Singleton nodes (isolated) become their own one-element clusters.
-    communities = louvain_communities(g, resolution=resolution, seed=42)
+    if algorithm == "leiden":
+        communities = _leiden(g, resolution, seed)
+    else:
+        communities = [
+            set(c)
+            for c in louvain_communities(g, weight="weight", resolution=resolution, seed=seed)
+        ]
     processes: list[BusinessProcess] = []
-    for i, community in enumerate(communities):
-        # Filter to real Component nodes (drop the virtual CMT hubs).
-        members = [n for n in community if g.nodes[n].get("category") not in {"dispatch_hub", None}]
-        if not members:
+    for community in communities:
+        comps = [n for n in community if g.nodes[n]["kind"] == "component"]
+        if not comps:
             continue
-        # Cluster label = most common category in the cluster, qualified by size.
-        cats = [g.nodes[n]["category"] for n in members]
-        top_cat = max(set(cats), key=cats.count)
-        label = f"{top_cat} cluster ({len(members)} components)"
+        objects = sorted(
+            {g.nodes[n]["api_name"] for n in community if g.nodes[n]["kind"] == "object"}
+            | {g.nodes[n]["object_name"] for n in comps if g.nodes[n]["object_name"]}
+        )
+        fields = [n for n in community if g.nodes[n]["kind"] == "field"]
+        cats: dict[str, int] = {}
+        for n in comps:
+            cats[g.nodes[n]["category"]] = cats.get(g.nodes[n]["category"], 0) + 1
         processes.append(
             BusinessProcess(
-                process_id=f"bp_{i:03d}",
-                label=label,
-                component_ids=members,
+                process_id="",
+                label="",
+                component_ids=sorted(comps, key=lambda n: g.nodes[n]["api_name"].lower()),
+                object_names=objects,
+                field_ids=fields,
+                categories=dict(sorted(cats.items())),
             )
         )
-    log.info("understand.clustering.detected", count=len(processes), resolution=resolution)
+    processes.sort(key=lambda p: (-p.size, p.object_names))
+    for i, p in enumerate(processes):
+        p.process_id = f"bp_{i:03d}"
+        p.label = _label(p, g)
+    log.info(
+        "understand.clustering.detected",
+        count=len(processes),
+        resolution=resolution,
+        algorithm=algorithm,
+    )
     return processes
 
 
-def write_processes_to_graph(handle: GraphHandle, processes: list[BusinessProcess]) -> int:
-    """Persist BusinessProcess nodes + PARTICIPATES_IN edges."""
+def _label(p: BusinessProcess, g: nx.Graph) -> str:
+    objs = [o for o in p.object_names if not o.endswith(("__mdt", "__e"))][:2]
+    head = " / ".join(objs) if objs else "Cross-object"
+    top = (
+        max(p.categories.items(), key=lambda kv: kv[1])[0].replace("_", " ")
+        if p.categories
+        else "components"
+    )
+    return f"{head} — {p.size} components, mostly {top}"
+
+
+def _leiden(g: nx.Graph, resolution: float, seed: int) -> list[set[str]]:
+    try:
+        import igraph as ig  # type: ignore[import-not-found]
+        import leidenalg  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover — optional extra
+        raise RuntimeError(
+            "Leiden requires the 'leiden' extra (python-igraph + leidenalg)"
+        ) from exc
+    nodes = list(g.nodes)
+    index = {n: i for i, n in enumerate(nodes)}
+    ig_g = ig.Graph(n=len(nodes), edges=[(index[u], index[v]) for u, v in g.edges], directed=False)
+    ig_g.es["weight"] = [g[u][v].get("weight", 1.0) for u, v in g.edges]
+    part = leidenalg.find_partition(
+        ig_g,
+        leidenalg.RBConfigurationVertexPartition,
+        weights="weight",
+        resolution_parameter=resolution,
+        seed=seed,
+    )
+    return [{nodes[i] for i in community} for community in part]
+
+
+def write_processes_to_graph(handle: Any, processes: list[BusinessProcess]) -> int:
+    """Persist BusinessProcess nodes + PARTICIPATES_IN edges to FalkorDB."""
     if not processes:
         return 0
-    proc_rows = [
-        {"id": p.process_id, "label": p.label, "size": len(p.component_ids)} for p in processes
-    ]
     handle.graph.query(
-        """
-        UNWIND $rows AS row
-        CREATE (bp:BusinessProcess {id: row.id, label: row.label, size: row.size})
-        """,
-        params={"rows": proc_rows},
+        "UNWIND $rows AS row CREATE (bp:BusinessProcess {id: row.id, label: row.label, size: row.size})",
+        params={
+            "rows": [{"id": p.process_id, "label": p.label, "size": p.size} for p in processes]
+        },
     )
     edge_rows = [
-        {"comp_id": cid, "process_id": p.process_id} for p in processes for cid in p.component_ids
+        {"nid": nid, "pid": p.process_id}
+        for p in processes
+        for nid in [*p.component_ids, *p.field_ids]
     ]
     handle.graph.query(
         """
         UNWIND $rows AS row
-        MATCH (c:Component {id: row.comp_id})
-        MATCH (bp:BusinessProcess {id: row.process_id})
-        MERGE (c)-[:PARTICIPATES_IN]->(bp)
+        MATCH (n {id: row.nid}), (bp:BusinessProcess {id: row.pid})
+        MERGE (n)-[:PARTICIPATES_IN]->(bp)
         """,
         params={"rows": edge_rows},
     )

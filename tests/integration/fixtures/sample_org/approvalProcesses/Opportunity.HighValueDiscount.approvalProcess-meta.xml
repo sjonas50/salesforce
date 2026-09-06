@@ -1,13 +1,58 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ApprovalProcess xmlns="http://soap.sforce.com/2006/04/metadata">
-    <fullName>HighValueDiscount</fullName>
     <active>true</active>
-    <enableMobileDeviceAccess>true</enableMobileDeviceAccess>
+    <label>High Value Discount</label>
+    <allowRecall>true</allowRecall>
+    <allowedSubmitters><type>owner</type></allowedSubmitters>
     <approvalStep>
+        <name>Manager_Review</name>
+        <label>Manager Review</label>
+        <allowDelegate>true</allowDelegate>
         <assignedApprover>
-            <approver>
-                <type>userHierarchyField</type>
-            </approver>
+            <approver><type>userHierarchyField</type><name>Manager</name></approver>
+            <whenMultipleApprovers>FirstResponse</whenMultipleApprovers>
         </assignedApprover>
+        <entryCriteria>
+            <criteriaItems>
+                <field>Opportunity.Discount__c</field>
+                <operation>greaterThan</operation>
+                <value>20</value>
+            </criteriaItems>
+        </entryCriteria>
+        <ifCriteriaNotMet>ApproveRecord</ifCriteriaNotMet>
+        <rejectBehavior><type>RejectRequest</type></rejectBehavior>
     </approvalStep>
+    <approvalStep>
+        <name>VP_Review</name>
+        <label>VP Review</label>
+        <assignedApprover>
+            <approver><type>user</type><name>vp.sales@example.com</name></approver>
+        </assignedApprover>
+        <entryCriteria>
+            <formula>Discount__c &gt; 35 || Amount &gt; 500000</formula>
+        </entryCriteria>
+        <rejectBehavior><type>BackToPrevious</type></rejectBehavior>
+    </approvalStep>
+    <emailTemplate>unfiled$public/Discount_Approval_Request</emailTemplate>
+    <entryCriteria>
+        <criteriaItems>
+            <field>Opportunity.Discount__c</field>
+            <operation>greaterThan</operation>
+            <value>20</value>
+        </criteriaItems>
+        <criteriaItems>
+            <field>Opportunity.Amount</field>
+            <operation>greaterThan</operation>
+            <value>100000</value>
+        </criteriaItems>
+    </entryCriteria>
+    <finalApprovalActions>
+        <action><name>Discount_Approved</name><type>FieldUpdate</type></action>
+    </finalApprovalActions>
+    <finalRejectionActions>
+        <action><name>Discount_Rejected</name><type>FieldUpdate</type></action>
+    </finalRejectionActions>
+    <finalApprovalRecordLock>true</finalApprovalRecordLock>
+    <recordEditability>AdminOnly</recordEditability>
+    <showApprovalHistory>true</showApprovalHistory>
 </ApprovalProcess>

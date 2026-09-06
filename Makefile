@@ -1,7 +1,7 @@
 # Salesforce Off-Ramp — developer workflow targets.
 # All commands run via `uv run` so no pre-activated venv is needed.
 
-.PHONY: help dev sync test test-unit test-integration test-ooe lint lint-fix typecheck smoke clean refresh-fixtures hooks
+.PHONY: help dev sync test test-unit test-integration test-ooe lint lint-fix typecheck smoke clean refresh-fixtures hooks xray-fixture gate
 
 help:  ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -36,8 +36,16 @@ lint-fix:  ## Lint + format with auto-fix.
 typecheck:  ## Type-check with mypy strict.
 	uv run mypy
 
-smoke:  ## End-to-end smoke test (currently uses mocked SF; real scratch org TODO Phase 0.10).
+smoke:  ## End-to-end smoke test (mocked SF backend).
 	uv run pytest -m smoke
+
+xray-fixture:  ## Run the full X-Ray pipeline on the fixture org (no FalkorDB, no LLM) and verify the report.
+	uv run offramp xray --fixture tests/integration/fixtures/sample_org --out out/xray --no-graph-db --skip-annotations
+	uv run python scripts/verify_xray.py out/xray
+	uv run python scripts/verify_extract_coverage.py out/xray/extract --min-categories 21
+
+gate:  ## Build-plan v0.2 gate: lint + typecheck + tests + fixture X-Ray.
+	$(MAKE) lint typecheck test xray-fixture
 
 clean:  ## Remove caches and build artifacts.
 	rm -rf .ruff_cache .mypy_cache .pytest_cache .coverage htmlcov coverage.xml

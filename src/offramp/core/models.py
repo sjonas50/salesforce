@@ -114,8 +114,31 @@ class DependencyKind(StrEnum):
     COMPENSATES = "compensates"
 
 
+class EvidenceChannel(StrEnum):
+    """How an edge was discovered (AD-30). Every edge carries exactly one."""
+
+    APEX_PARSE = "apex_parse"
+    FLOW_XML = "flow_xml"
+    FORMULA = "formula"
+    WORKFLOW_XML = "workflow_xml"
+    RULE_XML = "rule_xml"  # assignment / escalation / auto-response / sharing / approval
+    ROLLUP_XML = "rollup_xml"
+    LWC_IMPORT = "lwc_import"
+    CMT_DISPATCH = "cmt_dispatch"
+    SCHEMA = "schema"  # lookup / master-detail relationship
+    PATH = "path"  # object inferred from file path (objects/<Object>/...)
+    DEPENDENCY_API = "dependency_api"  # MetadataComponentDependency row (cross-check)
+    CRON = "cron"
+
+
 class Dependency(BaseModel):
-    """Edge in the Component graph."""
+    """Edge in the Component graph.
+
+    ``source_id`` / ``target_id`` reference either a :class:`Component` or a
+    :class:`SchemaNode`. ``evidence`` records the channel that produced the
+    edge and ``confidence`` how sure we are; both are surfaced in the X-Ray
+    report (AD-30).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -123,7 +146,66 @@ class Dependency(BaseModel):
     target_id: UUID
     kind: DependencyKind
     confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
+    evidence: EvidenceChannel = EvidenceChannel.PATH
     notes: str | None = None
+    corroborated_by_api: bool = Field(
+        default=False,
+        description="True when a MetadataComponentDependency row agrees with this edge.",
+    )
+
+
+class SchemaNodeKind(StrEnum):
+    OBJECT = "object"
+    FIELD = "field"
+    RECORD_TYPE = "record_type"
+
+
+class SchemaNode(BaseModel):
+    """A data-model node: an sObject, a field, or a record type.
+
+    Schema nodes are first-class graph participants so automation can be
+    linked to the data it reads and writes (build plan v0.2, C21).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID = Field(default_factory=uuid4)
+    org_alias: str
+    kind: SchemaNodeKind
+    api_name: str = Field(
+        description="Object: 'Account'; field: 'Account.Industry'; RT: 'Account.Partner'"
+    )
+    object_name: str
+    label: str = ""
+    field_type: str | None = Field(default=None, description="Salesforce field type for fields")
+    reference_to: list[str] = Field(
+        default_factory=list, description="Lookup / master-detail targets"
+    )
+    relationship_name: str | None = None
+    custom: bool = False
+    picklist_values: list[str] = Field(default_factory=list)
+    formula: str | None = None
+    required: bool = False
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class SchemaSnapshot(BaseModel):
+    """Data model of one org at extraction time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    org_alias: str
+    nodes: list[SchemaNode] = Field(default_factory=list)
+    source: str = Field(default="source_tree", description="'source_tree' | 'describe'")
+
+    def objects(self) -> list[SchemaNode]:
+        return [n for n in self.nodes if n.kind is SchemaNodeKind.OBJECT]
+
+    def fields(self) -> list[SchemaNode]:
+        return [n for n in self.nodes if n.kind is SchemaNodeKind.FIELD]
+
+    def by_api_name(self) -> dict[str, SchemaNode]:
+        return {n.api_name: n for n in self.nodes}
 
 
 class AST(BaseModel):

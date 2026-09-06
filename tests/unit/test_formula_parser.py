@@ -80,7 +80,7 @@ def test_comparison_operators() -> None:
 
 def test_unsupported_function_raises() -> None:
     with pytest.raises(UnsupportedFormulaError):
-        parse("REGEX(Name, 'foo')")
+        parse("NOT_A_REAL_FUNCTION(Name, 'foo')")
 
 
 def test_trailing_input_raises() -> None:

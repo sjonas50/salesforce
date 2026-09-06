@@ -4,6 +4,8 @@ Three-product platform that reverse-engineers a Salesforce org's automation surf
 
 **Products:** X-Ray (diagnostic) → Agent Factory (translation + runtime) → Shadow Mode (validation + regression detection).
 
+**Current focus (build plan v0.2, 2026-09-05): X-Ray only.** See [docs/build-plan.md](docs/build-plan.md) and [docs/strategy.md](docs/strategy.md). `src/generate`, `src/validate`, `src/cutover` stay in-tree but are not extended until X-Ray has paying customers (AD-27).
+
 ## Source-of-truth documents
 
 These are the **canonical** specs. Read them before changing anything significant.
@@ -11,7 +13,8 @@ These are the **canonical** specs. Read them before changing anything significan
 - [Salesforce-OffRamp-Build-Plan-v2.1.docx](Salesforce-OffRamp-Build-Plan-v2.1.docx) — strategic build plan (34 weeks, M0–M13). Immutable except via formal v2.x revision.
 - [docs/research.md](docs/research.md) — independent technology evaluation + 6 gap items (Appendix A) integrated into AD-21..AD-26.
 - [docs/architecture.md](docs/architecture.md) — engineering architecture spec; components C1–C18.
-- [docs/build-plan.md](docs/build-plan.md) — code-level phase plan with runnable test gates.
+- [docs/build-plan.md](docs/build-plan.md) — v0.2 X-Ray-first phase plan with runnable gates (v0.1 archived alongside).
+- [docs/strategy.md](docs/strategy.md) — market study summary and decisions AD-27..AD-31.
 
 When the strategic plan and the engineering architecture disagree, **the architecture document wins for code-level decisions**; escalate the conflict to the tech lead so v2.x can be updated.
 
@@ -48,7 +51,7 @@ uv run offramp cutover advance --process <id>
 - **Salesforce Pub/Sub API gRPC client** (Avro encoding) for CDC + Platform Events
 - **FalkorDB** (Cypher) for the Component knowledge graph
 - **Postgres 16** for app state + shadow store
-- **tree-sitter-javascript** for LWC analysis; **summit-ast** for Apex parsing; **lightning-flow-scanner-core** for Flows
+- **Own Apex tokenizer/reference extractor** in `src/extract/apex` (AD-31; summit-ast is archived, do not add it); regex classifier for LWC; own Flow XML normalizer in `src/extract/categories/flow.py`
 - **Salto** (NaCl) + **sf CLI** for metadata extraction
 - **Engram** (internal Rust + Python SDK) for provenance; **F44** for Base L2 Merkle anchoring of sensitive decisions
 - **Kafka (MSK) prod / Redis Streams dev** via pluggable event-bus abstraction
@@ -63,14 +66,19 @@ The 20 ADs in v2.1 §3 plus these deltas from research:
 - **AD-24**: MCP gateway implements `/limits` polling + per-process API quota allocation
 - **AD-25**: JWT cert rotation runbook + automated quarterly sandbox rotation test
 - **AD-26**: SF API version pinned to **66.0 (Spring '26)**; upgrade cadence one release behind GA
+- **AD-27**: X-Ray first; translation/validation/cutover deferred to year two
+- **AD-28**: Own parsers produce every dependency edge; `MetadataComponentDependency` is a cross-check only (it is Beta, 2,000-row capped, unfilterable by name)
+- **AD-29**: Two extraction paths, REST/Tooling first, sf CLI second; both feed `src/extract/pull/source_tree.py`
+- **AD-30**: Every edge carries `evidence` + `confidence`, surfaced in the X-Ray report
+- **AD-31**: No summit-ast; tokenizer-based Apex analysis behind the `ApexAnalysis` contract
 
 ## File structure
 
 ```
 src/
 ├── core/            # shared models, secrets, utils
-├── extract/         # C1–C4: pull, dispatch, lwc, ooe_audit
-├── understand/      # C5–C6: graph, annotate, cluster, orphan, xray report
+├── extract/         # C1–C4, C19–C21: pull (source_tree, tooling_api, sf_cli), apex, schema, dispatch, lwc, ooe_audit
+├── understand/      # C5–C6, C22–C23: dependencies, impact, graph, annotate, cluster, orphan, xray report
 ├── generate/        # C7–C9: tier1, tier2, tier3, formula, adapters
 ├── runtime/         # C10–C11: ooe state machine, rules engine
 ├── mcp/             # C12: gateway, tools, quota, anchoring
@@ -102,6 +110,9 @@ These are the things that will silently bite. **Read these before writing code t
 9. **Salesforce Order of Execution has 21 steps** with specific re-fire (step 12) and cascade semantics. **Do not implement OoE logic outside `src/runtime/ooe`.** All transaction semantics live there.
 10. **Camunda 8 self-managed requires Enterprise license** for prod since Oct 2024. We chose Temporal for this reason — do not introduce Zeebe.
 11. **n8n Sustainable Use License** prohibits SaaS-product use. If we ever bundle n8n as a no-code lane, internal automation only.
+12. **`MetadataComponentDependency` is Beta** (still at v68.0). 2,000 rows per Tooling query, 100,000 via Bulk 2.0, no `queryMore`/`OFFSET`, no filter by component name, reports omitted, Bulk queries fail in Developer Edition. Query it per `MetadataComponentType`, never as one unbounded query, and never make it the only source of an edge (AD-28).
+13. **Metadata API retrieve caps**: 10,000 files / 39 MB compressed per retrieve. The sf CLI pull client batches `package.xml` per type and re-splits on failure.
+14. **Categories registry is lazy.** `offramp.extract.categories.base.get_extractor` imports the extractor modules on first call to avoid the LWC ↔ registry circular import. Do not import `offramp.extract.lwc.bundle` from `_passthrough.py`.
 
 ## Conventions
 

@@ -3,5 +3,24 @@
     <escalationRule>
         <fullName>SLAExpiry</fullName>
         <active>true</active>
+        <ruleEntry>
+            <businessHours>Default</businessHours>
+            <criteriaItems>
+                <field>Case.Priority</field>
+                <operation>equals</operation>
+                <value>High</value>
+            </criteriaItems>
+            <criteriaItems>
+                <field>Case.Priority_Score__c</field>
+                <operation>greaterThan</operation>
+                <value>80</value>
+            </criteriaItems>
+            <escalationAction>
+                <assignedTo>Tier2_Support</assignedTo>
+                <assignedToType>Queue</assignedToType>
+                <minutesToEscalation>120</minutesToEscalation>
+                <notifyCaseOwnerTemplate>unfiled$public/Case_Escalated</notifyCaseOwnerTemplate>
+            </escalationAction>
+        </ruleEntry>
     </escalationRule>
 </EscalationRules>

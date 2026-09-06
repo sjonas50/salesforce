@@ -65,17 +65,57 @@ class CategoryExtractor(abc.ABC):
 
 
 _REGISTRY: dict[CategoryName, type[CategoryExtractor]] = {}
+_LOADED = False
+
+
+def _ensure_loaded() -> None:
+    """Import every extractor module once, on first lookup.
+
+    Lazy so that importing ``offramp.extract.lwc.bundle`` (which needs this
+    module) never re-enters the ``categories`` package mid-initialization.
+    """
+    global _LOADED
+    if _LOADED:
+        return
+    _LOADED = True
+    import importlib
+
+    for mod in (
+        "offramp.extract.categories.apex_class",
+        "offramp.extract.categories.apex_trigger",
+        "offramp.extract.categories.approval_process",
+        "offramp.extract.categories.assignment_rule",
+        "offramp.extract.categories.flow",
+        "offramp.extract.categories.formula_field",
+        "offramp.extract.categories.rules",
+        "offramp.extract.categories.rollup_summary",
+        "offramp.extract.categories.platform_event",
+        "offramp.extract.categories.validation_rule",
+        "offramp.extract.categories.workflow_rule",
+        "offramp.extract.categories._passthrough",
+        "offramp.extract.lwc.bundle",
+    ):
+        importlib.import_module(mod)
+    from offramp.extract.lwc.bundle import LWCBundleExtractor
+
+    _REGISTRY.setdefault(CategoryName.LWC_BUNDLE, LWCBundleExtractor)
 
 
 def register(cls: type[CategoryExtractor]) -> type[CategoryExtractor]:
     """Class decorator: register an extractor class against its ``category``."""
     if not hasattr(cls, "category"):
         raise TypeError(f"{cls.__name__} missing required ClassVar 'category'")
+    existing = _REGISTRY.get(cls.category)
+    # Passthrough fallbacks never displace a real extractor, whatever the
+    # import order.
+    if existing is not None and getattr(cls, "is_passthrough", False):
+        return cls
     _REGISTRY[cls.category] = cls
     return cls
 
 
 def get_extractor(category: CategoryName) -> CategoryExtractor:
+    _ensure_loaded()
     cls = _REGISTRY.get(category)
     if cls is None:
         raise KeyError(f"No extractor registered for {category}")
@@ -83,4 +123,5 @@ def get_extractor(category: CategoryName) -> CategoryExtractor:
 
 
 def registered_categories() -> set[CategoryName]:
+    _ensure_loaded()
     return set(_REGISTRY.keys())

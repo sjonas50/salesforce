@@ -1,24 +1,39 @@
 # Salesforce Off-Ramp
 
-Reverse-engineer a Salesforce org's automation surface, translate each component to the right execution tier (deterministic rules, durable workflows, or AI agents), validate via shadow execution against live production traffic, and migrate incrementally with cryptographically-provenanced rollback.
+Reverse-engineer a Salesforce org into a dependency graph that shows its work: every automation, every field it reads or writes, every edge tagged with the evidence that produced it and a confidence score.
 
-**Three products in one platform:**
-- **X-Ray** — diagnostic. Inventory + dependency graph + complexity heatmap of an org.
-- **Agent Factory** — translation + runtime. Generates the rules / workflows / agents that replicate the extracted business logic.
-- **Shadow Mode** — validation + regression detection. Forks live CDC traffic and runs translated artifacts in parallel, catching divergence before cutover and continuously after.
+**X-Ray** (the product being built now) answers five questions about an org:
+
+1. **What is here?** Inventory of all 21 automation categories plus the data model.
+2. **What depends on what?** A typed graph across Apex, Flows, formulas, rules, schema, and UI, built from our own parsers and cross-checked against Salesforce's Dependency API.
+3. **Where is this used?** Every inbound reference to a field, object, class, or Flow, with evidence.
+4. **What happens when this changes?** Change closure, plus the automations that fire on a save in Order-of-Execution sequence.
+5. **What can go?** Unused fields, legacy Workflow Rules and Process Builders with blast radius, orphaned Apex with the channel that explains it.
+
+**Agent Factory** (translation + runtime) and **Shadow Mode** (validation) remain in the codebase for year two.
 
 ## Status
 
-All six build-plan phases shipped. **163 unit + integration tests** passing, plus **4 load benchmarks**. Real services (no mocks): Salesforce Pub/Sub gRPC, Postgres, FalkorDB, Anthropic Claude Sonnet 4.6.
+**Build plan v0.2 (2026-09-05): X-Ray first.** See [docs/strategy.md](docs/strategy.md) for the market study and [docs/build-plan.md](docs/build-plan.md) for the phase plan. Translation, shadow execution, and cutover code stays in-tree but is not on the twelve-month roadmap (AD-27).
 
-| Phase | What | Tests |
+| Area | What works today | Tests |
 |---|---|---|
-| 0 — Scaffold | Project skeleton, shared models, JWT cert rotation runbook | 25 |
-| 1 — Extract Engine | 21-category metadata extractors + dynamic dispatch + LWC analyzer + OoE Surface Audit | +18 |
-| 2 — Understanding + X-Ray | FalkorDB graph + Louvain clustering + LLM annotation (Claude Sonnet 4.6) + complexity scoring + 6-channel orphan resolver + interactive HTML report | +12 |
-| 3 — OoE Runtime + Translators + MCP | 21-step OoE state machine + SF formula parser + Tier 1/2/3 translators + dual-target generation + managed-package adapters + MCP gateway + AD-24 quota allocator | +52 |
-| 4 — Shadow + Compare Mode | Real Pub/Sub gRPC subscriber + Postgres shadow store + 7-category divergence (incl. AD-22 gap-event) + AD-21 lag/gap reconciliation + readiness scoring + dashboard + compliance export + Compare Mode debug-log replay | +26 |
-| 5 — Cutover Orchestrator | Hash-deterministic per-record router + saga compensation + auto-advance/rollback driven by readiness scores + Engram + F44 anchoring + Behavioral Parity Report + post-cutover monitor + Helm chart + on-prem operator skeleton + 4 production runbooks | +30 + 4 load |
+| Extraction | Fixture / SFDX directories (C19), REST + Tooling API through the MCP gateway, sf CLI retrieve with re-split on size limits. All 21 categories normalized; no passthrough. | `test_source_tree_and_schema.py`, `test_tooling_pull_client.py`, `test_sf_cli_pull_client.py` |
+| Apex analysis | Tokenizer-based reference extraction: class graph, SOQL/DML targets, field reads and writes, callouts, named credentials, async targets, entry points (C20). | `test_apex_analyzer.py` |
+| Flows | Every element and resource type; derived object / field / Apex / subflow / email references; Tooling JSON and XML accepted. | `test_flow_extractor.py` |
+| Formulas | Deterministic parser with `$` globals, `&` concat, 80+ functions; tolerant reference fallback. | `test_formula_parser.py`, `test_formula_references.py` |
+| Schema | Objects, fields, lookups, record types, picklists from source tree or describe (C21). | `test_source_tree_and_schema.py` |
+| Graph | Typed dependency graph, evidence channel + confidence per edge, Dependency-API cross-check (C22). | `test_tooling_pull_client.py`, `test_extract_e2e.py` |
+| Impact | Where-used, change closure, save impact in Order-of-Execution order, unused fields, legacy automation (C23). | `test_xray_e2e.py` |
+| Report | X-Ray HTML with a where-used explorer, save-impact tables, unused / legacy sections, D3 graph; JSON schema 2.0. | `scripts/verify_xray.py` |
+| Year two (kept) | OoE runtime, Tier 1/2/3 translators, Shadow Mode, Compare Mode, cutover orchestrator. | existing suites |
+
+Run the whole thing on the fixture org:
+
+```bash
+make xray-fixture      # → out/xray/xray.html, out/xray/xray.json, out/xray/extract/*.json
+make gate              # lint + typecheck + tests + fixture X-Ray
+```
 
 ## Quickstart
 
@@ -30,51 +45,44 @@ make test         # unit tests
 make smoke        # smoke (in-memory SF backend)
 ```
 
-`make help` shows the full target list. See [`docs/build-plan.md`](docs/build-plan.md) for the per-phase test gates.
+`make help` shows the full target list. See [`docs/build-plan.md`](docs/build-plan.md) for the phase gates.
 
 ### CLI
 
 ```bash
-# Phase 1: extract a Salesforce org's automation surface
-uv run offramp extract --fixture tests/integration/fixtures/sample_org \
-                       --out out/sample_org
+# Extract from a fixture / SFDX project directory
+uv run offramp extract --fixture tests/integration/fixtures/sample_org --out out/fx
+uv run offramp extract --source-dir ~/projects/acme-sfdx --out out/acme
 
-# Phase 2: render the X-Ray report (FalkorDB + Claude Sonnet 4.6 required)
-uv run offramp xray --fixture tests/integration/fixtures/sample_org \
-                    --out out/sample_org/xray
+# Extract from a live org (SF_* env for JWT bearer auth; REST/Tooling by default)
+uv run offramp extract --org acme_prod --out out/acme
+uv run offramp extract --org acme_prod --via sf-cli --out out/acme     # full Metadata API bodies
 
-# Phase 3: translate components to runtime artifacts
-uv run offramp generate --fixture tests/integration/fixtures/sample_org \
-                        --out out/artifact
+# Ask the graph (answers from graph.json, no org round-trip)
+uv run offramp impact --from out/fx --where-used Lead.Country__c
+uv run offramp impact --from out/fx --save Opportunity                  # OoE-ordered save impact
+uv run offramp impact --from out/fx --change LeadScoringService --depth 3
+uv run offramp impact --from out/fx --unused
+uv run offramp impact --from out/fx --legacy
 
-# Phase 4: shadow execution + reports
-uv run offramp shadow start --process-id demo --artifact out/artifact/tier1 \
-                            --events tests/integration/fixtures/synthetic_events.json
-uv run offramp shadow status --process-id demo
-uv run offramp shadow report --process-id demo --out out/shadow_report
-uv run offramp shadow replay-log --process-id demo --artifact out/artifact/tier1 \
-                                 --log-file path/to/sf_debug.log
+# Full X-Ray report (FalkorDB and LLM annotation are optional)
+uv run offramp xray --fixture tests/integration/fixtures/sample_org --out out/xray --no-graph-db --skip-annotations
+uv run offramp xray --org acme_prod --out out/acme/xray --save-impact Opportunity --save-impact Lead
 
-# Phase 5: cutover orchestration
-uv run offramp cutover begin    --process-id demo
-uv run offramp cutover advance  --process-id demo --dry-run
-uv run offramp cutover advance  --process-id demo
-uv run offramp cutover status   --process-id demo
-uv run offramp cutover rollback --process-id demo --confirm
-uv run offramp cutover monitor  --process-id demo --auto-rollback
-uv run offramp cutover parity-report --process-id demo --org-alias fisher \
-                                     --out out/parity
+# Year-two commands (kept, not extended): generate, shadow, cutover
 ```
 
 ## Documentation
 
+- **[docs/strategy.md](docs/strategy.md)** — market study summary (Sweep, Dependency API status, pricing) and decisions AD-27..AD-31
+- **[docs/build-plan.md](docs/build-plan.md)** — v0.2 X-Ray-first phase plan with runnable gates ([v0.1 archived](docs/build-plan-v0.1-archived.md))
+- **[docs/architecture.md](docs/architecture.md)** — engineering architecture (components C1–C23, ADs)
 - **[docs/research.md](docs/research.md)** — independent technology evaluation
-- **[docs/architecture.md](docs/architecture.md)** — engineering architecture (components C1–C18, ADs)
-- **[docs/build-plan.md](docs/build-plan.md)** — phase-gated execution plan
 - **[CLAUDE.md](CLAUDE.md)** — project conventions + stack-specific pitfalls
 
 ### Runbooks
 
+- [Connect a scratch org](docs/runbooks/connect_scratch_org.md) — JWT bearer setup for `--org`
 - [JWT cert rotation](docs/runbooks/jwt_cert_rotation.md) — AD-25
 - [Cutover advance](docs/runbooks/cutover_advance.md) — staged-percentage advance flow
 - [Cutover rollback](docs/runbooks/cutover_rollback.md) — auto + instant
@@ -88,34 +96,50 @@ uv run offramp cutover parity-report --process-id demo --org-alias fisher \
 - **FastAPI** + **MCP server SDK** for the gateway (the single Salesforce interface)
 - **Temporal** (Python SDK 1.16+) for Tier 2 durable workflows
 - **LangGraph** for Tier 3 judgment-required agents (run inside Temporal activities)
-- **Anthropic Claude Sonnet 4.6** for Phase 2 LLM annotation (provider-routable)
-- **simple-salesforce** for REST + Bulk API 2.0; **gRPC + fastavro** for Pub/Sub CDC
-- **FalkorDB** (Cypher) for the Component knowledge graph
-- **Postgres 16** (asyncpg) for app + shadow stores
-- **tree-sitter-javascript** for LWC analysis; **summit-ast** for Apex; **lightning-flow-scanner-core** for Flows
-- **Salto** + **sf CLI** for metadata extraction
+- **Anthropic Claude Sonnet 4.6** for optional LLM annotation (provider-routable)
+- **simple-salesforce** for REST, Tooling API, and describe; **sf CLI** for Metadata API retrieves; **gRPC + fastavro** for Pub/Sub CDC
+- **Own parsers** (AD-31): tokenizer-based Apex analyzer in `src/offramp/extract/apex`, Flow XML/JSON normalizer, recursive-descent formula parser, regex LWC classifier. No summit-ast, no Salto.
+- **FalkorDB** (Cypher) for interactive graph exploration (optional; `networkx` in memory otherwise)
+- **Postgres 16** (asyncpg) for app + shadow stores (year two)
 - **Engram** (internal) for provenance; **F44** for Base L2 Merkle anchoring of sensitive decisions
 
 ## Repo layout
 
 ```
 src/offramp/
-├── core/            shared models, secrets, logging, config
-├── extract/         C1–C4: pull, dispatch, lwc, ooe_audit, per-category extractors
-├── understand/      C5–C6: graph, annotate, cluster, orphan, X-Ray report
-├── generate/        C7–C9: tier1/tier2/tier3 translators, formula parser, managed-package adapters
-├── runtime/         C10–C11: OoE state machine, rules engine
-├── mcp/             C12: gateway, tools, quota allocator, real SF backend
-├── validate/        C13–C15: shadow executor, Compare Mode, AD-21 reconciliation
-├── cutover/         C16: router, saga, orchestrator, parity report, post-cutover monitor
+├── core/            shared models (Component, Dependency, SchemaNode, EvidenceChannel), secrets, logging, config
+├── extract/         C1–C4, C19–C21
+│   ├── pull/        source_tree (C19), tooling_api (REST path), sf_cli, fixture, reconciler
+│   ├── apex/        C20 tokenizer + reference extractor → ApexAnalysis
+│   ├── categories/  one extractor per category (flow, apex_class, approval_process, rules, …)
+│   ├── schema.py    C21 SchemaSnapshot from source tree or describe
+│   ├── dispatch/    C2 CMT-driven trigger dispatch, framework detectors
+│   ├── lwc/         C3 bundle classifier + Apex/schema imports
+│   └── ooe_audit/   C4 Order-of-Execution surface audit
+├── understand/      C5–C6, C22–C23
+│   ├── dependencies.py  C22 typed graph, evidence + confidence, Dependency-API cross-check
+│   ├── impact.py        C23 where-used, change closure, save impact, unused, legacy
+│   ├── clustering.py    Louvain / Leiden business-process clusters
+│   ├── graph_loader.py  optional FalkorDB materialization
+│   ├── orphan/          6-channel orphan resolver (graph-aware)
+│   ├── annotate.py      optional LLM annotation
+│   └── xray/            report renderer (HTML + JSON schema 2.0)
+├── mcp/             C12: gateway (query, tooling_query, describe, restful), quota allocator, JWT auth, real SF backend
+├── cli/             extract, xray, impact (+ year-two: generate, shadow, cutover)
+├── generate/        C7–C9 (year two): translators, formula parser + emitter, adapters
+├── runtime/         C10–C11 (year two): OoE state machine, rules engine
+├── validate/        C13–C15 (year two): shadow executor, Compare Mode, reconciliation
+├── cutover/         C16 (year two)
 ├── engram/          C17: provenance client
-├── event_bus/       C18: pluggable bus
-└── cli/             offramp CLI entry points
+└── event_bus/       C18: pluggable bus
+
+templates/           xray.html.j2 (report), shadow_dashboard, parity_report
 
 tests/
-├── unit/            136 unit tests (fast, no external services)
-├── integration/     27 integration tests (require Postgres + FalkorDB)
-├── ooe_runtime/     OoE state-machine cases (refire, cascade, mixed-DML, validation)
+├── unit/            251 unit tests (no external services)
+├── integration/     22 tests; fixture-driven ones run anywhere, FalkorDB / Postgres ones self-skip
+├── integration/fixtures/sample_org/   realistic fixture org: 10 Apex classes, 2 triggers, 7 Flows, schema, rules, tooling dumps
+├── ooe_runtime/     18 OoE state-machine cases (refire, cascade, mixed-DML, validation)
 └── load/            4 throughput + latency benchmarks
 
 infra/
@@ -123,15 +147,16 @@ infra/
 └── operator/        on-prem operator (CRDs, RBAC, controller-loop contract)
 
 docs/
+├── strategy.md      market study + decisions AD-27..AD-31
+├── build-plan.md    v0.2 X-Ray-first plan (v0.1 archived alongside)
+├── architecture.md  engineering architecture (C1–C23, ADs)
 ├── research.md      tech evaluation
-├── architecture.md  engineering architecture (C1–C18, ADs)
-├── build-plan.md    phase-gated execution plan
-└── runbooks/        production runbooks (cutover, rollback, quota, reconciliation, JWT rotation)
+└── runbooks/        scratch-org connect, JWT rotation, cutover, rollback, quota, reconciliation
 ```
 
 ## Local development
 
-The integration tests need real services. Bring them up via Docker:
+Everything on the X-Ray path runs with no services: `make gate` needs only `uv`. FalkorDB and Postgres are optional and only used by the tests that name them (they self-skip when unreachable). Bring them up via Docker if you want them:
 
 ```bash
 # Postgres for app state + shadow store
@@ -144,18 +169,25 @@ docker exec offramp-postgres psql -U offramp -d offramp -c "CREATE DATABASE offr
 docker run -d --name offramp-falkordb -p 6379:6379 falkordb/falkordb
 ```
 
-For the LLM annotation pass (X-Ray), copy `.env.example` → `.env` and fill in `LLM_API_KEY` + `ANTHROPIC_API_KEY` with your Anthropic API key. `.env` is gitignored.
+For a live org, copy `.env.example` → `.env` and set the `SF_*` variables (Connected App consumer key, integration username, JWT private key path); see the [scratch-org runbook](docs/runbooks/connect_scratch_org.md). For the optional LLM annotation pass set `LLM_API_KEY`. `.env` is gitignored.
+
+The `sf` CLI is only needed for `--via sf-cli`; the default REST/Tooling path needs nothing installed on the customer side.
 
 ```bash
-make test                              # unit tests only
-uv run pytest -m integration           # integration suite (needs Postgres + FalkorDB)
+make test                              # unit + OoE runtime tests
+make gate                              # lint + typecheck + tests + fixture X-Ray + coverage gate
+uv run pytest -m integration           # integration suite (service-backed tests self-skip)
 uv run pytest -m load                  # benchmarks
 uv run pytest                          # everything
 ```
 
+### What the Tooling path can and cannot see
+
+The REST/Tooling path reads full bodies for Apex, Flows, validation rules, workflow rules and actions, custom fields, LWC, platform events, CDC channels, CMT rows, CronTriggers, and the data model. Approval processes and assignment / escalation / auto-response / sharing rules come back **partial** (name, object, active) because Salesforce does not expose their bodies through Tooling; the report flags them and `--via sf-cli` or `--source-dir` fills them in.
+
 ## Deployment
 
-The Helm chart in `infra/helm/offramp/` is single-tenant per customer. Install:
+The Helm chart in `infra/helm/offramp/` predates the v0.2 pivot and deploys the year-two services (MCP gateway, shadow subscriber, cutover CronJob). The hosted X-Ray service (OAuth connect, scheduled scans) is Phase D of the build plan and is not in the chart yet. Install what exists with:
 
 ```bash
 helm install offramp infra/helm/offramp/ \

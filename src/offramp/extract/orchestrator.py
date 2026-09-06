@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from offramp.core.logging import get_logger
-from offramp.core.models import CategoryName, Component, Provenance
+from offramp.core.models import CategoryName, Component, Provenance, SchemaSnapshot
 from offramp.engram.client import EngramClient
 from offramp.extract import categories as _categories  # noqa: F401 — register extractors
 from offramp.extract.audit import CoverageReport, build_report
@@ -25,7 +25,7 @@ from offramp.extract.categories.base import (
 )
 from offramp.extract.dispatch.class_resolver import DispatchEdge
 from offramp.extract.dispatch.class_resolver import resolve as resolve_dispatch
-from offramp.extract.dispatch.cmt_reader import read_cmt_records_from_fixture
+from offramp.extract.dispatch.cmt_reader import CMTRecord, read_cmt_records_from_fixture
 from offramp.extract.dispatch.framework_detectors import (
     FrameworkSignal,
 )
@@ -36,8 +36,38 @@ from offramp.extract.ooe_audit.audit import SurfaceAuditReport
 from offramp.extract.ooe_audit.audit import audit as audit_ooe
 from offramp.extract.pull.base import PullClient
 from offramp.extract.pull.reconciler import reconcile
+from offramp.extract.pull.source_tree import SourceTree
+from offramp.extract.schema import from_source_tree
+from offramp.understand.dependencies import DependencyGraph, build_graph
 
 log = get_logger(__name__)
+
+
+@dataclass
+class ToolingSupplement:
+    """Data that does not come from the metadata files themselves.
+
+    Filled from ``_tooling/*.json`` dumps on the fixture / SFDX path and from
+    :class:`offramp.extract.pull.tooling_api.ToolingApiPullClient` on the
+    REST path. Every field is optional; missing data narrows the graph, it
+    never breaks the run.
+    """
+
+    cmt_records: list[CMTRecord] = field(default_factory=list)
+    dependency_rows: list[dict[str, Any]] = field(default_factory=list)
+    cron_rows: list[dict[str, Any]] = field(default_factory=list)
+    schema: SchemaSnapshot | None = None
+
+    @classmethod
+    def from_source_tree(cls, tree: SourceTree, *, org_alias: str) -> ToolingSupplement:
+        deps = tree.tooling_json("dependencies") or []
+        cron = tree.tooling_json("cron_triggers") or []
+        return cls(
+            cmt_records=read_cmt_records_from_fixture(tree.root),
+            dependency_rows=[r for r in deps if isinstance(r, dict)],
+            cron_rows=[r for r in cron if isinstance(r, dict)],
+            schema=from_source_tree(tree, org_alias=org_alias),
+        )
 
 
 class ExtractOrchestrator:
@@ -50,13 +80,19 @@ class ExtractOrchestrator:
         client: PullClient,
         engram: EngramClient,
         fixture_root: Path | None = None,
+        supplement: ToolingSupplement | None = None,
     ) -> None:
         self.org_alias = org_alias
         self.client = client
         self.engram = engram
-        # ``fixture_root`` is only honored when the client is the FixturePullClient
-        # — used to find the optional CMT records dump.
+        # ``fixture_root`` (or any SFDX-shaped directory) supplies the tooling
+        # dumps + schema when no explicit supplement is given.
         self.fixture_root = fixture_root
+        if supplement is None and fixture_root is not None:
+            supplement = ToolingSupplement.from_source_tree(
+                SourceTree(fixture_root), org_alias=org_alias
+            )
+        self.supplement = supplement or ToolingSupplement()
 
     async def run(self) -> ExtractRunResult:
         log.info("extract.run.start", org=self.org_alias, source=self.client.source_name)
@@ -112,19 +148,20 @@ class ExtractOrchestrator:
             )
             components.append(component)
 
-        # Dispatch resolution is opt-in — only runs when CMT records are present.
-        dispatch_edges: list[DispatchEdge] = []
-        framework_signals: list[FrameworkSignal] = []
-        if self.fixture_root is not None:
-            cmt_records = read_cmt_records_from_fixture(self.fixture_root)
-            apex_class_names = {
-                c.api_name
-                for c in components
-                if c.category is CategoryName.APEX_CLASS and c.api_name is not None
-            }
-            cmt_types_present = {r.cmt_type for r in cmt_records}
-            framework_signals = detect_frameworks(apex_class_names, cmt_types_present)
-            dispatch_edges = resolve_dispatch(cmt_records, apex_class_names)
+        # Dispatch resolution + framework detection (CMT rows may be empty).
+        apex_class_names = {
+            c.api_name
+            for c in components
+            if c.category is CategoryName.APEX_CLASS and c.api_name is not None
+        }
+        cmt_records = self.supplement.cmt_records
+        cmt_types_present = {r.cmt_type for r in cmt_records}
+        framework_signals: list[FrameworkSignal] = detect_frameworks(
+            apex_class_names, cmt_types_present
+        )
+        dispatch_edges: list[DispatchEdge] = (
+            resolve_dispatch(cmt_records, apex_class_names) if cmt_records else []
+        )
 
         ooe_report = audit_ooe(components, self.org_alias)
         coverage = build_report(
@@ -151,15 +188,15 @@ class ExtractOrchestrator:
             ooe=ooe_report,
             dispatch_edges=dispatch_edges,
             framework_signals=framework_signals,
+            schema=self.supplement.schema,
+            dependency_rows=list(self.supplement.dependency_rows),
+            cron_rows=list(self.supplement.cron_rows),
         )
 
 
 def _detect_suspected_gaps(attempted: dict[CategoryName, int]) -> list[str]:
     """Flag categories with zero records as a possible scope or fixture gap."""
     return [f"no records found for {cat.value}" for cat, n in attempted.items() if n == 0]
-
-
-from dataclasses import dataclass, field  # noqa: E402 — placed after imports for clarity
 
 
 @dataclass
@@ -173,6 +210,23 @@ class ExtractRunResult:
     ooe: SurfaceAuditReport | None = None
     dispatch_edges: list[DispatchEdge] = field(default_factory=list)
     framework_signals: list[FrameworkSignal] = field(default_factory=list)
+    schema: SchemaSnapshot | None = None
+    dependency_rows: list[dict[str, Any]] = field(default_factory=list)
+    cron_rows: list[dict[str, Any]] = field(default_factory=list)
+    _graph: DependencyGraph | None = field(default=None, repr=False)
+
+    def build_graph(self) -> DependencyGraph:
+        """The C22 graph for this run (built once, cached)."""
+        if self._graph is None:
+            self._graph = build_graph(
+                org_alias=self.org_alias,
+                components=self.components,
+                schema=self.schema,
+                dispatch_edges=self.dispatch_edges,
+                api_rows=self.dependency_rows,
+                cron_rows=self.cron_rows,
+            )
+        return self._graph
 
     def write(self, out_dir: Path) -> None:
         """Persist a JSON dump of every artifact under ``out_dir``."""
@@ -205,6 +259,22 @@ class ExtractRunResult:
         )
         (out_dir / "framework_signals.json").write_text(
             json.dumps([asdict(s) for s in self.framework_signals], indent=2),
+            encoding="utf-8",
+        )
+        if self.schema is not None:
+            (out_dir / "schema.json").write_text(
+                self.schema.model_dump_json(indent=2), encoding="utf-8"
+            )
+        graph = self.build_graph()
+        (out_dir / "graph.json").write_text(
+            json.dumps(graph.to_jsonable(), indent=2, sort_keys=True), encoding="utf-8"
+        )
+        from offramp.understand.impact import (
+            summarize,  # local import keeps extract importable alone
+        )
+
+        (out_dir / "impact_summary.json").write_text(
+            json.dumps(summarize(graph, self.schema, self.components), indent=2, sort_keys=True),
             encoding="utf-8",
         )
 

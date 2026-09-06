@@ -1,9 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Flow xmlns="http://soap.sforce.com/2006/04/metadata">
-    <apiVersion>66.0</apiVersion>
+    <apiVersion>50.0</apiVersion>
+    <label>Legacy Opportunity Process</label>
     <processType>Workflow</processType>
     <status>Active</status>
+    <start>
+        <object>Opportunity</object>
+        <triggerType>RecordAfterSave</triggerType>
+        <connector><targetReference>StageGate</targetReference></connector>
+    </start>
     <decisions>
         <name>StageGate</name>
+        <label>Stage Gate</label>
+        <rules>
+            <name>ClosedWon</name>
+            <conditions>
+                <leftValueReference>$Record.StageName</leftValueReference>
+                <operator>EqualTo</operator>
+                <rightValue><stringValue>Closed Won</stringValue></rightValue>
+            </conditions>
+            <connector><targetReference>ClearDiscount</targetReference></connector>
+        </rules>
     </decisions>
+    <recordUpdates>
+        <name>ClearDiscount</name>
+        <inputReference>$Record</inputReference>
+        <inputAssignments>
+            <field>Discount__c</field>
+            <value><numberValue>0</numberValue></value>
+        </inputAssignments>
+    </recordUpdates>
 </Flow>

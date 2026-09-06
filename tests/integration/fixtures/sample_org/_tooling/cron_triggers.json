@@ -1,0 +1,3 @@
+[
+    {"CronJobDetail": {"Name": "Nightly Lead Cleanup", "JobType": "7"}, "State": "WAITING", "CronExpression": "0 0 2 * * ?", "apex_class": "NightlyLeadCleanup"}
+]

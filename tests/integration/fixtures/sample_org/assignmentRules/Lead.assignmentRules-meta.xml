@@ -3,5 +3,25 @@
     <assignmentRule>
         <fullName>RouteToInsideSales</fullName>
         <active>true</active>
+        <ruleEntry>
+            <assignedTo>Inside_Sales</assignedTo>
+            <assignedToType>Queue</assignedToType>
+            <criteriaItems>
+                <field>Lead.Country__c</field>
+                <operation>equals</operation>
+                <value>US,CA</value>
+            </criteriaItems>
+            <criteriaItems>
+                <field>Lead.AnnualRevenue</field>
+                <operation>lessThan</operation>
+                <value>1000000</value>
+            </criteriaItems>
+            <template>unfiled$public/Lead_Assigned</template>
+        </ruleEntry>
+        <ruleEntry>
+            <assignedTo>enterprise.rep@example.com</assignedTo>
+            <assignedToType>User</assignedToType>
+            <formula>AnnualRevenue &gt;= 1000000 &amp;&amp; ISPICKVAL(Legacy_Segment__c, "Enterprise")</formula>
+        </ruleEntry>
     </assignmentRule>
 </AssignmentRules>

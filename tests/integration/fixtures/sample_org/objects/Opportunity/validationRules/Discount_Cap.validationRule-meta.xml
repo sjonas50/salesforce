@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Discount_Cap</fullName>
+    <active>true</active>
+    <errorConditionFormula>Discount__c &gt; 40 &amp;&amp; NOT(ISCHANGED(StageName)) &amp;&amp; $User.ProfileId &lt;&gt; $Setup.Discount_Settings__c.Admin_Profile_Id__c</errorConditionFormula>
+    <errorDisplayField>Discount__c</errorDisplayField>
+    <errorMessage>Discounts above 40% need an admin.</errorMessage>
+</ValidationRule>

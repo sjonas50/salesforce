@@ -2,142 +2,272 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>X-Ray: {{ org_alias }}</title>
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>X-Ray · {{ org_alias }}</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 <style>
-  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1c2024; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
-  h1, h2 { color: #0d1116; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
-  .meta { color: #57606a; font-size: 13px; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
-  .card { border: 1px solid #d0d7de; border-radius: 6px; padding: 1rem; background: #f6f8fa; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #e2e6ea; }
-  th { background: #eef0f3; font-weight: 600; }
-  .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
-  .b-low  { background: #def2d9; color: #1f7a26; }
-  .b-med  { background: #fff3cd; color: #997404; }
-  .b-high { background: #f8d7da; color: #842029; }
-  .b-tier1 { background: #cfe2ff; color: #084298; }
-  .b-tier2 { background: #ffe5d0; color: #84501c; }
-  .b-tier3 { background: #e2d9f3; color: #492370; }
-  .b-excl { background: #e9ecef; color: #495057; }
-  .b-crit { background: #f8d7da; color: #842029; }
-  svg { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; }
-  .legend { font-size: 11px; color: #57606a; margin-top: 4px; }
+  :root { --ink:#15202B; --ink2:#4B5A68; --ink3:#7A8894; --rule:#CDD5DC; --paper:#F3F5F7; --paper2:#E9EDF1; --accent:#0F6E6B; --accent-soft:#D9ECEA; --amber:#B8741A; --amber-soft:#F5E7D0; --red:#A63D2F; --red-soft:#F3DBD6; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace; --sans:"Instrument Sans","Helvetica Neue",Arial,sans-serif; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.55 var(--sans); }
+  .wrap { max-width:1280px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--rule); padding-bottom:20px; margin-bottom:28px; }
+  .eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink3); margin:0 0 8px; }
+  h1 { font-size:34px; margin:0 0 6px; letter-spacing:-.01em; }
+  h2 { font-size:22px; margin:44px 0 10px; letter-spacing:-.01em; }
+  h3 { font-size:16px; margin:20px 0 8px; }
+  .meta { color:var(--ink3); font-family:var(--mono); font-size:12px; }
+  p.lede { color:var(--ink2); max-width:70ch; margin:6px 0 0; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:18px 0 6px; }
+  .tile { background:var(--paper2); border:1px solid var(--rule); padding:12px 14px; }
+  .tile b { display:block; font-family:var(--mono); font-size:22px; font-weight:500; font-variant-numeric:tabular-nums; }
+  .tile span { font-size:12px; color:var(--ink3); text-transform:uppercase; letter-spacing:.05em; }
+  .tablewrap { overflow-x:auto; border:1px solid var(--rule); margin:10px 0 18px; background:#fff; }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { background:var(--paper2); font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink3); font-weight:500; position:sticky; top:0; }
+  tr:last-child td { border-bottom:none; }
+  td.num { font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .flag { display:inline-block; font-family:var(--mono); font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; padding:1px 6px; border-radius:3px; white-space:nowrap; }
+  .ok { background:var(--accent-soft); color:#0B4F4D; } .warn { background:var(--amber-soft); color:var(--amber); } .bad { background:var(--red-soft); color:var(--red); } .dim { background:var(--paper2); color:var(--ink3); }
+  .b-low{background:#def2d9;color:#1f7a26}.b-med{background:#fff3cd;color:#997404}.b-high{background:#f8d7da;color:#842029}
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
+  @media (max-width:900px){ .grid2 { grid-template-columns:1fr; } }
+  #graph svg { background:#fff; border:1px solid var(--rule); width:100%; height:620px; }
+  .legend { font-size:12px; color:var(--ink3); margin-top:4px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin:0 4px 0 12px; vertical-align:-1px; }
+  input[type=search] { font:14px var(--sans); padding:8px 10px; border:1px solid var(--rule); width:min(480px,100%); background:#fff; }
+  .explorer { border:1px solid var(--rule); background:#fff; padding:14px 16px; margin:10px 0 18px; }
+  .explorer .hit { padding:10px 0; border-top:1px solid var(--rule); }
+  .explorer .hit:first-child { border-top:none; }
+  .explorer .hit h4 { margin:0 0 4px; font-size:15px; }
+  .explorer .hit small { color:var(--ink3); font-family:var(--mono); font-size:11.5px; }
+  .refs { margin:6px 0 0; padding:0; list-style:none; display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:4px 16px; font-size:13px; }
+  .refs li span.ev { font-family:var(--mono); font-size:11px; color:var(--ink3); }
+  details summary { cursor:pointer; color:var(--accent); font-weight:600; }
+  .note { background:var(--amber-soft); border-left:3px solid var(--amber); padding:10px 14px; margin:12px 0; font-size:13.5px; }
+  .path { font-family:var(--mono); font-size:12px; color:var(--ink2); }
 </style>
 </head>
 <body>
-<h1>X-Ray: {{ org_alias }}</h1>
-<p class="meta">Generated {{ generated_at }} · {{ component_count }} components, {{ process_count }} business processes, {{ orphan_resolved }}/{{ orphan_total }} orphans resolved</p>
+<div class="wrap">
+<header>
+  <p class="eyebrow">X-Ray · org intelligence report</p>
+  <h1>{{ org_alias }}</h1>
+  <p class="lede">Every number below traces to a dependency edge with an evidence channel and a confidence. Parser-derived edges are the source of truth; Salesforce's Dependency API is used only as a cross-check.</p>
+  <p class="meta">Generated {{ generated_at }} · {{ component_count }} components · {{ summary.nodes }} graph nodes · {{ summary.edges }} edges · {{ process_count }} business processes</p>
+  <div class="tiles">
+    <div class="tile"><b>{{ summary.edges }}</b><span>dependency edges</span></div>
+    <div class="tile"><b>{{ summary.edges_by_evidence | length }}</b><span>evidence channels</span></div>
+    <div class="tile"><b>{{ summary.unused_custom_fields }}</b><span>unused custom fields</span></div>
+    <div class="tile"><b>{{ summary.ui_only_custom_fields }}</b><span>layout / report only</span></div>
+    <div class="tile"><b>{{ summary.legacy_active }}</b><span>active legacy automations</span></div>
+    <div class="tile"><b>{{ orphan_total - orphan_resolved }}</b><span>likely dead classes</span></div>
+    <div class="tile"><b>{{ summary.api_matched }} / {{ summary.api_only }}</b><span>API corroborated / API-only</span></div>
+    <div class="tile"><b>{{ summary.unresolved_references }}</b><span>unresolved references</span></div>
+  </div>
+</header>
 
-<h2>Executive Summary</h2>
-<div class="grid">
-  <div class="card">
-    <h3>Component Inventory</h3>
-    <table>
-      <tr><th>Category</th><th>Count</th><th>Coverage</th></tr>
-      {% for row in coverage_by_category %}
-      <tr>
-        <td>{{ row.category }}</td>
-        <td>{{ row.succeeded }} / {{ row.attempted }}</td>
-        <td>{{ "%.0f"|format(row.coverage_ratio * 100) }}%</td>
-      </tr>
-      {% endfor %}
-    </table>
-  </div>
-  <div class="card">
-    <h3>OoE Surface (21 steps)</h3>
-    <table>
-      <tr><th>#</th><th>Step</th><th>Components</th><th>Priority</th></tr>
-      {% for o in ooe_observations %}
-      <tr>
-        <td>{{ o.step }}</td>
-        <td>{{ o.step_name }}</td>
-        <td>{{ o.structural_count }}</td>
-        <td>
-          {% if o.priority == 'critical' %}<span class="badge b-crit">critical</span>
-          {% elif o.priority == 'standard' %}<span class="badge b-med">standard</span>
-          {% else %}<span class="badge b-excl">exclude</span>{% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
-  </div>
+{% if partial_categories %}
+<div class="note"><b>Partial coverage.</b> These categories were read through the Tooling API, which exposes only names and status for them: {{ partial_categories | join(", ") }}. Re-run with <code>--via sf-cli</code> or supply an SFDX project for full bodies.</div>
+{% endif %}
+
+<h2>Where is this used?</h2>
+<p class="lede">Type a field, object, or class. Results list every inbound reference with the channel that produced it.</p>
+<div class="explorer">
+  <input type="search" id="wu-search" placeholder="Lead.Country__c, Opportunity, LeadScoringService…" autocomplete="off">
+  <div id="wu-results"></div>
 </div>
 
-<h2>Dependency Graph (Force-Directed)</h2>
+<h2>Save impact, in Order of Execution</h2>
+<p class="lede">What runs when a record is saved, in the order Salesforce runs it. <span class="flag ok">fires</span> executes at that step; <span class="flag dim">reads</span> / <span class="flag warn">writes</span> touch the object's fields from elsewhere; <span class="flag bad">inactive</span> is present but switched off.</p>
+{% for si in save_impacts %}
+<h3>{{ si.object }}</h3>
+<div class="tablewrap"><table>
+  <tr><th>Step</th><th>Phase</th><th>Automation</th><th>Category</th><th>Relation</th><th>Evidence</th><th>Conf.</th></tr>
+  {% for r in si.rows %}
+  <tr><td class="num">{{ r.step }}</td><td>{{ r.step_name }}</td><td><b>{{ r.component }}</b></td><td>{{ r.category }}</td>
+      <td><span class="flag {% if r.relation == 'fires' %}ok{% elif r.relation == 'writes' %}warn{% elif r.relation == 'inactive' %}bad{% else %}dim{% endif %}">{{ r.relation }}</span></td>
+      <td class="num">{{ r.evidence }}</td><td class="num">{{ "%.2f"|format(r.confidence) }}</td></tr>
+  {% endfor %}
+</table></div>
+{% endfor %}
+
+<div class="grid2">
+<div>
+<h2>Unused custom fields</h2>
+<p class="lede">No automation, code, or component references. Fields seen only by layouts or reports (through the Dependency API) are listed separately.</p>
+<div class="tablewrap"><table>
+  <tr><th>Field</th><th>Label</th><th>Status</th><th>Seen by</th></tr>
+  {% for u in unused_fields %}
+  <tr><td><b>{{ u.field }}</b></td><td>{{ u.label }}</td>
+      <td><span class="flag {% if u.reason == 'no_references' %}bad{% else %}warn{% endif %}">{{ u.reason | replace('_',' ') }}</span></td>
+      <td>{{ u.api_references | join(', ') }}</td></tr>
+  {% else %}<tr><td colspan="4">None found.</td></tr>{% endfor %}
+</table></div>
+</div>
+<div>
+<h2>Legacy automation</h2>
+<p class="lede">Workflow Rules and Process Builders (end of support 2025-12-31). Downstream counts components affected through the fields they write.</p>
+<div class="tablewrap"><table>
+  <tr><th>Automation</th><th>Type</th><th>Active</th><th>Fields</th><th>Downstream</th></tr>
+  {% for l in legacy %}
+  <tr><td><b>{{ l.name }}</b></td><td>{{ l.category | replace('_',' ') }}</td>
+      <td><span class="flag {% if l.active %}warn{% else %}dim{% endif %}">{{ 'yes' if l.active else 'no' }}</span></td>
+      <td>{{ l.fields | join(', ') }}</td><td class="num">{{ l.downstream }}</td></tr>
+  {% else %}<tr><td colspan="5">None found.</td></tr>{% endfor %}
+</table></div>
+</div>
+</div>
+
+<h2>Dependency graph</h2>
 <div id="graph"></div>
-<p class="legend">Node size = dependency degree · color = category · drag to reposition · scroll to zoom</p>
-<script>
-const data = {{ graph_json | safe }};
-const width = 1200, height = 600;
-const svg = d3.select("#graph").append("svg").attr("viewBox", `0 0 ${width} ${height}`).attr("width", width).attr("height", height);
-const g = svg.append("g");
-svg.call(d3.zoom().scaleExtent([0.3, 8]).on("zoom", (e) => g.attr("transform", e.transform)));
-const color = d3.scaleOrdinal(d3.schemeTableau10).domain(data.categories);
-const sim = d3.forceSimulation(data.nodes)
-  .force("link", d3.forceLink(data.links).id(d => d.id).distance(80))
-  .force("charge", d3.forceManyBody().strength(-200))
-  .force("center", d3.forceCenter(width/2, height/2));
-const link = g.append("g").attr("stroke", "#999").attr("stroke-opacity", 0.4).selectAll("line").data(data.links).join("line").attr("stroke-width", 1);
-const node = g.append("g").selectAll("circle").data(data.nodes).join("circle")
-  .attr("r", d => 5 + Math.sqrt(d.degree || 1) * 2)
-  .attr("fill", d => color(d.category))
-  .call(d3.drag().on("start", dragS).on("drag", dragD).on("end", dragE));
-node.append("title").text(d => `${d.name} [${d.category}]`);
-sim.on("tick", () => {
-  link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
-  node.attr("cx", d => d.x).attr("cy", d => d.y);
-});
-function dragS(e, d){ if(!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; }
-function dragD(e, d){ d.fx=e.x; d.fy=e.y; }
-function dragE(e, d){ if(!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }
-</script>
+<p class="legend">Node size = degree · shape: circle = automation, square = object, small dot = shared field · drag to reposition, scroll to zoom, hover for details. Dashed edges are API-only (no parser evidence).</p>
 
-<h2>Component Heatmap</h2>
-<table>
-  <tr>
-    <th>Component</th><th>Category</th><th>Difficulty</th><th>Risk</th><th>Tier</th><th>Domain</th><th>Summary</th>
-  </tr>
-  {% for row in component_rows %}
-  <tr>
-    <td><b>{{ row.name }}</b></td>
-    <td>{{ row.category }}</td>
-    <td><span class="badge {{ row.diff_class }}">{{ row.translation_difficulty }}</span></td>
-    <td><span class="badge {{ row.risk_class }}">{{ row.migration_risk }}</span></td>
-    <td><span class="badge {{ row.tier_class }}">{{ row.recommended_tier }}</span></td>
-    <td>{{ row.domain }}</td>
-    <td>{{ row.summary }}</td>
-  </tr>
-  {% endfor %}
-</table>
-
-<h2>Business Processes (Clusters)</h2>
-<table>
-  <tr><th>ID</th><th>Label</th><th>Members</th></tr>
+<h2>Business processes</h2>
+<div class="tablewrap"><table>
+  <tr><th>ID</th><th>Cluster</th><th>Objects</th><th>Components</th><th>Mix</th></tr>
   {% for p in processes %}
-  <tr><td>{{ p.process_id }}</td><td>{{ p.label }}</td><td>{{ p.size }}</td></tr>
+  <tr><td class="num">{{ p.process_id }}</td><td><b>{{ p.label }}</b></td><td>{{ p.objects | join(', ') }}</td><td class="num">{{ p.size }}</td>
+      <td>{% for c, n in p.categories.items() %}<span class="flag dim">{{ c | replace('_',' ') }} × {{ n }}</span> {% endfor %}</td></tr>
   {% endfor %}
-</table>
+</table></div>
 
-<h2>Orphan Resolution</h2>
-{% if orphan_resolutions %}
-<table>
-  <tr><th>Apex Class</th><th>Channel</th><th>Confidence</th><th>Evidence</th></tr>
+<h2>Component inventory</h2>
+<div class="tablewrap"><table>
+  <tr><th>Component</th><th>Category</th><th>Object</th><th>Active</th><th>In</th><th>Out</th><th>API ✓</th><th>Difficulty</th><th>Risk</th><th>Summary</th></tr>
+  {% for row in component_rows %}
+  <tr><td><b>{{ row.name }}</b>{% if row.partial %} <span class="flag warn">partial</span>{% endif %}{% if row.legacy %} <span class="flag warn">legacy</span>{% endif %}</td>
+      <td>{{ row.category | replace('_',' ') }}</td><td>{{ row.object }}</td>
+      <td>{% if row.active %}<span class="flag ok">yes</span>{% else %}<span class="flag bad">no</span>{% endif %}</td>
+      <td class="num">{{ row.inbound }}</td><td class="num">{{ row.outbound }}</td><td class="num">{{ row.api_corroborated }}</td>
+      <td>{% if row.translation_difficulty is not none %}<span class="flag {{ row.diff_class }}">{{ row.translation_difficulty }}</span>{% endif %}</td>
+      <td>{% if row.migration_risk is not none %}<span class="flag {{ row.risk_class }}">{{ row.migration_risk }}</span>{% endif %}</td>
+      <td>{{ row.summary }}</td></tr>
+  {% endfor %}
+</table></div>
+
+<div class="grid2">
+<div>
+<h2>Orphan Apex</h2>
+<p class="lede">Classes with no caller in the corpus, and the channel that explains why they exist.</p>
+<div class="tablewrap"><table>
+  <tr><th>Class</th><th>Channel</th><th>Conf.</th><th>Evidence</th></tr>
   {% for r in orphan_resolutions %}
-  <tr><td>{{ r.apex_class_name }}</td><td>{{ r.channel }}</td><td>{{ "%.2f"|format(r.confidence) }}</td><td>{{ r.evidence }}</td></tr>
+  <tr><td><b>{{ r.apex_class_name }}</b></td><td>{{ r.channel }}</td><td class="num">{{ "%.2f"|format(r.confidence) }}</td><td>{{ r.evidence }}</td></tr>
   {% endfor %}
-</table>
-{% else %}
-<p>No orphans detected.</p>
+  {% for n in unresolved_orphans %}
+  <tr><td><b>{{ n }}</b></td><td><span class="flag bad">likely dead</span></td><td></td><td>No caller, no entry point, no runtime evidence.</td></tr>
+  {% endfor %}
+</table></div>
+</div>
+<div>
+<h2>Coverage &amp; cross-check</h2>
+<div class="tablewrap"><table>
+  <tr><th>Category</th><th>Extracted</th><th>Coverage</th></tr>
+  {% for row in coverage_by_category %}
+  <tr><td>{{ row.category | replace('_',' ') }}{% if row.partial %} <span class="flag warn">partial</span>{% endif %}</td><td class="num">{{ row.succeeded }} / {{ row.attempted }}</td><td class="num">{{ "%.0f"|format(row.coverage_ratio * 100) }}%</td></tr>
+  {% endfor %}
+</table></div>
+<h3>Edges by evidence channel</h3>
+<div class="tablewrap"><table>
+  <tr><th>Channel</th><th>Edges</th></tr>
+  {% for k, v in summary.edges_by_evidence.items() %}<tr><td>{{ k }}</td><td class="num">{{ v }}</td></tr>{% endfor %}
+</table></div>
+{% if unresolved_references %}
+<details><summary>{{ unresolved_references | length }} unresolved references</summary>
+<div class="tablewrap"><table><tr><th>From</th><th>Kind</th><th>Target</th><th>Channel</th></tr>
+{% for u in unresolved_references %}<tr><td>{{ u.source }}</td><td>{{ u.kind }}</td><td>{{ u.target }}</td><td class="num">{{ u.evidence }}</td></tr>{% endfor %}
+</table></div></details>
+{% endif %}
+</div>
+</div>
+
+<h2>Order of Execution surface</h2>
+<div class="tablewrap"><table>
+  <tr><th>#</th><th>Step</th><th>Components</th><th>Priority</th></tr>
+  {% for o in ooe_observations %}
+  <tr><td class="num">{{ o.step }}</td><td>{{ o.step_name }}</td><td class="num">{{ o.structural_count }}</td>
+      <td><span class="flag {% if o.priority == 'critical' %}bad{% elif o.priority == 'standard' %}warn{% else %}dim{% endif %}">{{ o.priority }}</span></td></tr>
+  {% endfor %}
+</table></div>
+
+{% if schema_objects %}
+<h2>Data model</h2>
+<div class="tablewrap"><table>
+  <tr><th>Object</th><th>Label</th><th>Custom</th><th>Fields</th></tr>
+  {% for o in schema_objects %}<tr><td><b>{{ o.name }}</b></td><td>{{ o.label }}</td><td>{{ 'yes' if o.custom else '' }}</td><td class="num">{{ o.fields }}</td></tr>{% endfor %}
+</table></div>
 {% endif %}
 
-{% if unresolved_orphans %}
-<h3>Unresolved Orphans (likely dead code)</h3>
-<ul>
-  {% for n in unresolved_orphans %}<li>{{ n }}</li>{% endfor %}
-</ul>
-{% endif %}
+<details><summary>All {{ edge_rows | length }} dependency edges</summary>
+<div class="tablewrap"><table>
+  <tr><th>Source</th><th>Kind</th><th>Target</th><th>Evidence</th><th>Conf.</th><th>API</th><th>Notes</th></tr>
+  {% for e in edge_rows %}
+  <tr><td><b>{{ e.source }}</b> <small>{{ e.source_kind }}</small></td><td class="num">{{ e.kind }}</td><td><b>{{ e.target }}</b> <small>{{ e.target_kind }}</small></td><td class="num">{{ e.evidence }}</td><td class="num">{{ "%.2f"|format(e.confidence) }}</td><td>{{ '✓' if e.api else '' }}</td><td>{{ e.notes }}</td></tr>
+  {% endfor %}
+</table></div>
+</details>
 
+</div>
+
+<script id="wu-data" type="application/json">{{ where_used | tojson }}</script>
+<script>
+(function () {
+  const data = JSON.parse(document.getElementById('wu-data').textContent);
+  const input = document.getElementById('wu-search');
+  const out = document.getElementById('wu-results');
+  function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  function render(q) {
+    const needle = q.trim().toLowerCase();
+    const hits = (needle ? data.filter(d => d.name.toLowerCase().includes(needle)) : data.slice(0, 8)).slice(0, 25);
+    out.innerHTML = hits.map(d => `
+      <div class="hit">
+        <h4>${esc(d.name)} <small>${esc(d.kind)}${d.custom ? ' · custom' : ''} · ${d.total} reference${d.total === 1 ? '' : 's'}${d.api_only ? ' · ' + d.api_only + ' API-only' : ''}</small></h4>
+        ${d.refs.length ? '<ul class="refs">' + d.refs.map(r => `<li><b>${esc(r.name)}</b> <small>${esc(r.category.replace(/_/g,' '))}</small> <span class="ev">${esc(r.kind)} · ${esc(r.evidence)} · ${r.confidence.toFixed(2)}${r.api ? ' · api ✓' : ''}${r.notes ? ' · ' + esc(r.notes) : ''}</span></li>`).join('') + '</ul>' : '<div class="ev" style="color:var(--red)">No references found.</div>'}
+      </div>`).join('') || '<div class="hit">No match.</div>';
+  }
+  input.addEventListener('input', e => render(e.target.value));
+  render('');
+})();
+
+(function () {
+  const data = {{ graph_json | safe }};
+  const width = 1280, height = 620;
+  const svg = d3.select("#graph").append("svg").attr("viewBox", `0 0 ${width} ${height}`);
+  const g = svg.append("g");
+  svg.call(d3.zoom().scaleExtent([0.2, 8]).on("zoom", (e) => g.attr("transform", e.transform)));
+  const color = d3.scaleOrdinal(d3.schemeTableau10).domain(data.categories);
+  const sim = d3.forceSimulation(data.nodes)
+    .force("link", d3.forceLink(data.links).id(d => d.id).distance(d => d.kind === 'references' ? 60 : 90).strength(d => 0.3 + 0.5 * d.confidence))
+    .force("charge", d3.forceManyBody().strength(-140))
+    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("collide", d3.forceCollide(12));
+  const link = g.append("g").selectAll("line").data(data.links).join("line")
+    .attr("stroke", d => d.evidence === 'dependency_api' ? '#B8741A' : '#9AA5AE')
+    .attr("stroke-opacity", d => 0.25 + 0.5 * d.confidence)
+    .attr("stroke-dasharray", d => d.evidence === 'dependency_api' ? '4 3' : null)
+    .attr("stroke-width", d => d.kind === 'calls' || d.kind === 'triggers' ? 1.8 : 1);
+  const node = g.append("g").selectAll("g").data(data.nodes).join("g")
+    .call(d3.drag().on("start", dragS).on("drag", dragD).on("end", dragE));
+  node.each(function (d) {
+    const el = d3.select(this);
+    const r = 4 + Math.sqrt(d.degree || 1) * 2.2;
+    if (d.kind === 'object') el.append("rect").attr("x", -r).attr("y", -r).attr("width", 2 * r).attr("height", 2 * r).attr("fill", "#15202B").attr("opacity", 0.85);
+    else if (d.kind === 'field') el.append("circle").attr("r", Math.max(2.5, r * 0.55)).attr("fill", "#7A8894");
+    else el.append("circle").attr("r", r).attr("fill", color(d.category)).attr("opacity", d.active === false ? 0.35 : 1);
+    el.append("title").text(`${d.name} [${d.kind === 'component' ? d.category : d.kind}] · degree ${d.degree}${d.active === false ? ' · inactive' : ''}`);
+  });
+  const label = g.append("g").selectAll("text").data(data.nodes.filter(d => d.degree >= 4 && d.kind !== 'field')).join("text")
+    .text(d => d.name).attr("font-size", 10).attr("fill", "#4B5A68").attr("dx", 9).attr("dy", 3);
+  sim.on("tick", () => {
+    link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    node.attr("transform", d => `translate(${d.x},${d.y})`);
+    label.attr("x", d => d.x).attr("y", d => d.y);
+  });
+  function dragS(e, d){ if(!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; }
+  function dragD(e, d){ d.fx=e.x; d.fy=e.y; }
+  function dragE(e, d){ if(!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }
+})();
+</script>
 </body>
 </html>

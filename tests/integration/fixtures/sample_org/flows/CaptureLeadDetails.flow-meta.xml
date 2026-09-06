@@ -1,10 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Flow xmlns="http://soap.sforce.com/2006/04/metadata">
     <apiVersion>66.0</apiVersion>
+    <label>Capture Lead Details</label>
     <processType>Flow</processType>
     <status>Active</status>
+    <start>
+        <connector><targetReference>EnterDetails</targetReference></connector>
+    </start>
     <screens>
         <name>EnterDetails</name>
         <label>Enter Details</label>
+        <fields>
+            <name>CompanyField</name>
+            <fieldType>ObjectProvided</fieldType>
+            <objectFieldReference>lead.Company</objectFieldReference>
+        </fields>
+        <fields>
+            <name>EmailField</name>
+            <fieldType>InputField</fieldType>
+        </fields>
+        <connector><targetReference>CreateLead</targetReference></connector>
     </screens>
+    <variables>
+        <name>lead</name>
+        <dataType>SObject</dataType>
+        <objectType>Lead</objectType>
+    </variables>
+    <recordCreates>
+        <name>CreateLead</name>
+        <inputReference>lead</inputReference>
+    </recordCreates>
 </Flow>

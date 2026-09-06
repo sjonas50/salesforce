@@ -1,21 +1,22 @@
 """FalkorDB graph loader (C5).
 
-Materializes the Phase 1 ``ExtractRunResult`` into a typed FalkorDB graph
-(Cypher-compatible). Subsequent passes (clustering, annotation, X-Ray
-rendering) read from the graph rather than juggling raw lists.
+Materializes a :class:`DependencyGraph` into a typed FalkorDB graph
+(Cypher-compatible). The X-Ray CLI can also run without FalkorDB
+(``--no-graph-db``): clustering and impact analysis work on the in-memory
+graph; FalkorDB is for interactive exploration and the hosted service.
 
 Schema::
 
-    (:Component {id, category, name, api_name, namespace, content_hash})
+    (:Component {id, category, name, api_name, object_name, active})
+    (:Object    {id, api_name, custom})
+    (:Field     {id, api_name, object_name, field_type, custom})
+    (:RecordType{id, api_name, object_name})
+    (:External  {id, category, api_name})
     (:BusinessProcess {id, label, size})
-    (:DispatchEdge {dispatcher_cmt, handler_class, confidence})  # auxiliary
 
-Edges::
-
-    (:Component)-[:DEPENDS_ON]->(:Component)         # generic deps
-    (:Component)-[:DISPATCHES]->(:Component)         # CMT-resolved
-    (:Component)-[:CALLS]->(:Component)              # LWC -> Apex
-    (:Component)-[:PARTICIPATES_IN]->(:BusinessProcess)
+Edges carry ``kind``, ``evidence``, ``confidence``, ``api`` (corroborated),
+``notes``. Relationship type = upper-cased ``kind`` (REFERENCES, CALLS,
+TRIGGERS, OWNS, DISPATCHES, ...), plus PARTICIPATES_IN to BusinessProcess.
 """
 
 from __future__ import annotations
@@ -28,10 +29,17 @@ from falkordb import FalkorDB
 from falkordb.graph import Graph as FalkorGraph
 
 from offramp.core.logging import get_logger
-from offramp.core.models import Component
-from offramp.extract.dispatch.class_resolver import DispatchEdge
+from offramp.understand.dependencies import DependencyGraph
 
 log = get_logger(__name__)
+
+_LABELS = {
+    "component": "Component",
+    "object": "Object",
+    "field": "Field",
+    "record_type": "RecordType",
+    "external": "External",
+}
 
 
 @dataclass
@@ -43,16 +51,12 @@ class GraphHandle:
     name: str
 
     def reset(self) -> None:
-        """Drop and re-create the graph — used at the start of each load."""
-        # Graph may not exist yet on first load; suppress the missing-graph case.
         with contextlib.suppress(Exception):
             self.graph.delete()
         self.graph = self.client.select_graph(self.name)
 
 
 def open_graph(*, url: str, name: str) -> GraphHandle:
-    """Connect to FalkorDB and select a per-org graph."""
-    # FalkorDB python client expects host/port — parse from a redis:// URL.
     if "://" in url:
         _, _, hostport = url.partition("://")
     else:
@@ -64,16 +68,77 @@ def open_graph(*, url: str, name: str) -> GraphHandle:
     return GraphHandle(client=client, graph=graph, name=name)
 
 
-def load_components(handle: GraphHandle, components: list[Component]) -> int:
-    """Bulk-insert Component nodes. Returns the number written."""
+def load_dependency_graph(handle: GraphHandle, dep: DependencyGraph) -> tuple[int, int]:
+    """Replace the org's graph with ``dep``. Returns (nodes, edges) written."""
+    handle.reset()
+    by_label: dict[str, list[dict[str, Any]]] = {}
+    for n in dep.nodes.values():
+        label = _LABELS.get(n.kind, "External")
+        by_label.setdefault(label, []).append(
+            {
+                "id": n.id,
+                "kind": n.kind,
+                "category": n.category,
+                "name": n.name,
+                "api_name": n.api_name,
+                "object_name": n.object_name or "",
+                "active": bool(n.meta.get("active", True)),
+                "custom": bool(n.meta.get("custom", False)),
+                "field_type": str(n.meta.get("field_type") or ""),
+            }
+        )
+    for label, rows in by_label.items():
+        handle.graph.query(
+            f"""
+            UNWIND $rows AS row
+            CREATE (n:{label} {{
+                id: row.id, kind: row.kind, category: row.category, name: row.name,
+                api_name: row.api_name, object_name: row.object_name, active: row.active,
+                custom: row.custom, field_type: row.field_type
+            }})
+            """,
+            params={"rows": rows},
+        )
+    handle.graph.query("CREATE INDEX FOR (n:Component) ON (n.id)")
+    handle.graph.query("CREATE INDEX FOR (n:Field) ON (n.id)")
+    handle.graph.query("CREATE INDEX FOR (n:Object) ON (n.id)")
+
+    by_kind: dict[str, list[dict[str, Any]]] = {}
+    for e in dep.edges:
+        by_kind.setdefault(e.kind.value.upper(), []).append(
+            {
+                "s": str(e.source_id),
+                "t": str(e.target_id),
+                "evidence": e.evidence.value,
+                "confidence": float(e.confidence),
+                "api": bool(e.corroborated_by_api),
+                "notes": e.notes or "",
+            }
+        )
+    written = 0
+    for rel, rows in by_kind.items():
+        handle.graph.query(
+            f"""
+            UNWIND $rows AS row
+            MATCH (s {{id: row.s}}), (t {{id: row.t}})
+            CREATE (s)-[:{rel} {{evidence: row.evidence, confidence: row.confidence, api: row.api, notes: row.notes}}]->(t)
+            """,
+            params={"rows": rows},
+        )
+        written += len(rows)
+    log.info("understand.graph.loaded", graph=handle.name, nodes=len(dep.nodes), edges=written)
+    return len(dep.nodes), written
+
+
+# ---- back-compat shims used by older callers/tests ----------------------------
+
+
+def load_components(handle: GraphHandle, components: list[Any]) -> int:
+    """Legacy: load bare Component nodes (no edges). Prefer :func:`load_dependency_graph`."""
     if not components:
         return 0
-
-    # Clear any prior version of this org's graph so re-loads are idempotent.
     handle.reset()
-
-    # Cypher's UNWIND pattern is the fastest bulk insert for FalkorDB.
-    rows: list[dict[str, Any]] = [
+    rows = [
         {
             "id": str(c.id),
             "category": c.category.value,
@@ -87,110 +152,8 @@ def load_components(handle: GraphHandle, components: list[Component]) -> int:
     handle.graph.query(
         """
         UNWIND $rows AS row
-        CREATE (n:Component {
-            id: row.id,
-            category: row.category,
-            name: row.name,
-            api_name: row.api_name,
-            namespace: row.namespace,
-            content_hash: row.content_hash
-        })
+        CREATE (n:Component {id: row.id, category: row.category, name: row.name, api_name: row.api_name, namespace: row.namespace, content_hash: row.content_hash})
         """,
         params={"rows": rows},
     )
-    log.info("understand.graph.loaded", count=len(rows), graph=handle.name)
-    return len(rows)
-
-
-def load_dispatch_edges(
-    handle: GraphHandle,
-    edges: list[DispatchEdge],
-    *,
-    components_by_name: dict[str, str],
-) -> int:
-    """Insert DISPATCHES edges between Apex classes.
-
-    ``components_by_name`` maps Apex class name → component id. Edges where
-    we cannot resolve both endpoints are skipped (logged but not fatal — the
-    coverage report already accounts for unresolved references).
-    """
-    if not edges:
-        return 0
-    rows: list[dict[str, Any]] = []
-    skipped = 0
-    for e in edges:
-        # The dispatcher is identified by its CMT row, not an Apex class name —
-        # we don't carry that through to a Component yet. For Phase 2, model
-        # the edge as: a synthetic source labelled by the CMT row, terminating
-        # at the resolved handler class.
-        target_id = components_by_name.get(e.handler_class)
-        if target_id is None:
-            skipped += 1
-            continue
-        rows.append(
-            {
-                "cmt": e.dispatcher_cmt,
-                "target_id": target_id,
-                "field_name": e.field_name,
-                "confidence": float(e.confidence),
-            }
-        )
-    if rows:
-        handle.graph.query(
-            """
-            UNWIND $rows AS row
-            MERGE (d:DispatchSource {cmt: row.cmt})
-            WITH d, row
-            MATCH (t:Component {id: row.target_id})
-            MERGE (d)-[r:DISPATCHES {field_name: row.field_name}]->(t)
-            ON CREATE SET r.confidence = row.confidence
-            """,
-            params={"rows": rows},
-        )
-    log.info(
-        "understand.graph.dispatch_edges_loaded",
-        written=len(rows),
-        skipped=skipped,
-    )
-    return len(rows)
-
-
-def load_lwc_apex_edges(
-    handle: GraphHandle,
-    components: list[Component],
-    *,
-    components_by_name: dict[str, str],
-) -> int:
-    """Insert CALLS edges from LWC bundles to the Apex classes they import."""
-    rows: list[dict[str, Any]] = []
-    skipped = 0
-    for c in components:
-        if c.category.value != "lwc_bundle":
-            continue
-        imports = c.raw.get("apex_imports", []) if isinstance(c.raw, dict) else []
-        for imp in imports:
-            # imp is "ClassName.methodName"; map to ClassName component id
-            class_name = imp.split(".", 1)[0] if isinstance(imp, str) else ""
-            target_id = components_by_name.get(class_name)
-            if target_id is None:
-                skipped += 1
-                continue
-            rows.append(
-                {
-                    "lwc_id": str(c.id),
-                    "target_id": target_id,
-                    "import": imp,
-                }
-            )
-    if rows:
-        handle.graph.query(
-            """
-            UNWIND $rows AS row
-            MATCH (lwc:Component {id: row.lwc_id})
-            MATCH (apex:Component {id: row.target_id})
-            MERGE (lwc)-[r:CALLS {import: row.import}]->(apex)
-            """,
-            params={"rows": rows},
-        )
-    log.info("understand.graph.lwc_apex_edges_loaded", written=len(rows), skipped=skipped)
     return len(rows)

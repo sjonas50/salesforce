@@ -1,9 +1,42 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Flow xmlns="http://soap.sforce.com/2006/04/metadata">
     <apiVersion>66.0</apiVersion>
+    <label>Send Welcome Email</label>
     <processType>AutoLaunchedFlow</processType>
     <status>Active</status>
+    <variables>
+        <name>recordId</name>
+        <dataType>String</dataType>
+        <isInput>true</isInput>
+    </variables>
+    <variables>
+        <name>lead</name>
+        <dataType>SObject</dataType>
+        <objectType>Lead</objectType>
+    </variables>
+    <start>
+        <connector><targetReference>GetLead</targetReference></connector>
+    </start>
+    <recordLookups>
+        <name>GetLead</name>
+        <object>Lead</object>
+        <filters>
+            <field>Id</field>
+            <operator>EqualTo</operator>
+            <value><elementReference>recordId</elementReference></value>
+        </filters>
+        <queriedFields>Email</queriedFields>
+        <queriedFields>OwnerId</queriedFields>
+        <outputReference>lead</outputReference>
+        <connector><targetReference>SendEmail</targetReference></connector>
+    </recordLookups>
     <actionCalls>
         <name>SendEmail</name>
+        <actionName>Lead.Welcome_Lead_Alert</actionName>
+        <actionType>emailAlert</actionType>
+        <inputParameters>
+            <name>SObjectRowId</name>
+            <value><elementReference>lead.Id</elementReference></value>
+        </inputParameters>
     </actionCalls>
 </Flow>

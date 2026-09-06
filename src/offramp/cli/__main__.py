@@ -1,12 +1,7 @@
-"""``offramp`` CLI entry point (Phase 0 skeleton).
+"""``offramp`` CLI entry point.
 
-Subcommands land per phase:
-
-* Phase 1: ``offramp extract``
-* Phase 2: ``offramp xray``
-* Phase 3: ``offramp generate``, ``offramp deploy``
-* Phase 4: ``offramp shadow``
-* Phase 5: ``offramp cutover``
+X-Ray (build plan v0.2): ``extract``, ``xray``, ``impact``.
+Year-two (kept, not extended): ``generate``, ``shadow``, ``cutover``.
 """
 
 from __future__ import annotations
@@ -18,6 +13,7 @@ from offramp import __version__
 from offramp.cli.cutover import add_cutover_subparser
 from offramp.cli.extract import add_extract_subparser
 from offramp.cli.generate import add_generate_subparser
+from offramp.cli.impact import add_impact_subparser
 from offramp.cli.shadow import add_shadow_subparser
 from offramp.cli.xray import add_xray_subparser
 from offramp.core.logging import get_logger
@@ -33,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("info", help="Print platform info and exit.")
     add_extract_subparser(sub)
     add_xray_subparser(sub)
+    add_impact_subparser(sub)
     add_generate_subparser(sub)
     add_shadow_subparser(sub)
     add_cutover_subparser(sub)
@@ -43,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "info":
-        log.info("offramp.info", version=__version__, status="phase-1-extract-engine")
+        log.info("offramp.info", version=__version__, status="xray-v0.2")
         return 0
     if hasattr(args, "func"):
         rc = args.func(args)

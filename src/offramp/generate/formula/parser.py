@@ -54,6 +54,7 @@ class TokenKind(StrEnum):
     GE = "GE"
     AND = "AND"  # &&
     OR = "OR"  # ||
+    AMP = "AMP"  # & string concatenation
     BANG = "BANG"  # !
     EOF = "EOF"
 
@@ -70,7 +71,7 @@ _TOKEN_RE = re.compile(
     \s+
     | (?P<NUMBER>\d+(?:\.\d+)?)
     | (?P<STRING>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')
-    | (?P<IDENT>[A-Za-z_][A-Za-z0-9_]*)
+    | (?P<IDENT>\$?[A-Za-z_][A-Za-z0-9_]*)
     | (?P<NEQ><>|!=)
     | (?P<LE><=)
     | (?P<GE>>=)
@@ -79,6 +80,7 @@ _TOKEN_RE = re.compile(
     | (?P<GT>>)
     | (?P<AND>&&)
     | (?P<OR>\|\|)
+    | (?P<AMP>&)
     | (?P<BANG>!)
     | (?P<DOT>\.)
     | (?P<LPAREN>\()
@@ -207,6 +209,64 @@ _KNOWN_FUNCTIONS: frozenset[str] = frozenset(
         "CASE",
         "BLANKVALUE",
         "NULLVALUE",
+        "ISNEW",
+        "ISCHANGED",
+        "PRIORVALUE",
+        "INCLUDES",
+        "REGEX",
+        "DATEVALUE",
+        "DATETIMEVALUE",
+        "TIMEVALUE",
+        "YEAR",
+        "MONTH",
+        "DAY",
+        "WEEKDAY",
+        "HOUR",
+        "MINUTE",
+        "SECOND",
+        "MILLISECOND",
+        "ISNUMBER",
+        "EXP",
+        "LN",
+        "LOG",
+        "SQRT",
+        "MCEILING",
+        "MFLOOR",
+        "LPAD",
+        "RPAD",
+        "BR",
+        "HYPERLINK",
+        "IMAGE",
+        "CASESAFEID",
+        "GETRECORDIDS",
+        "GETSESSIONID",
+        "ISCLONE",
+        "CURRENCYRATE",
+        "DISTANCE",
+        "GEOLOCATION",
+        "VLOOKUP",
+        "URLENCODE",
+        "HTMLENCODE",
+        "JSENCODE",
+        "JSINHTMLENCODE",
+        "PICKLISTCOUNT",
+        "FROMUNIXTIME",
+        "UNIXTIMESTAMP",
+        "FORMATDURATION",
+        "ISOWEEK",
+        "ISOYEAR",
+        "DAYOFYEAR",
+        "PARENTGROUPVAL",
+        "PREVGROUPVAL",
+        "INCLUDE",
+        "REQUIRESCRIPT",
+        "URLFOR",
+        "PREDICT",
+        "ADDERROR",
+        "REVERSE",
+        "INITCAP",
+        "TRUNC",
+        "NOT_",
     }
 )
 
@@ -271,10 +331,11 @@ class _Parser:
 
     def _parse_add(self) -> Node:
         left = self._parse_mul()
-        while self.peek().kind in {TokenKind.PLUS, TokenKind.MINUS}:
+        while self.peek().kind in {TokenKind.PLUS, TokenKind.MINUS, TokenKind.AMP}:
             tok = self.take()
             right = self._parse_mul()
-            left = BinaryOp(tok.text, left, right)
+            # '&' is string concatenation; the emitter's '+' on str operands matches.
+            left = BinaryOp("+" if tok.kind is TokenKind.AMP else tok.text, left, right)
         return left
 
     def _parse_mul(self) -> Node:

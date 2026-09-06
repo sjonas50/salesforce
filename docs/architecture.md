@@ -83,21 +83,26 @@
 | C16 | `src/cutover` | Hash-deterministic traffic shifter, saga compensation, instant rollback | Python | per-process routing config | Routing decisions (Engram + F44 anchored) |
 | C17 | `src/engram` | Provenance client (every read/write/decision anchored) | Python wrapping Rust core | Decision payloads | Engram record IDs |
 | C18 | `src/event_bus` | Pluggable abstraction (Redis Streams dev, Azure Event Hubs prod, NATS on-prem) | Python | Cross-component messages | Delivered events |
+| C19 | `src/extract/pull/source_tree` | One reader for sf-retrieve-shaped directories (fixtures, sf CLI output, SFDX projects); captures Apex bodies, all fields, objects, record types | Python | Directory | RawMetadataRecord + ObjectFiles |
+| C20 | `src/extract/apex` | Tokenizer-based Apex static analysis: class graph, SOQL/DML targets, field writes, callouts, entry points (AD-31) | Python | `.cls` / `.trigger` source | `ApexAnalysis` |
+| C21 | `src/extract/schema` | Data model from source tree and/or REST describe | Python | objects/, describeGlobal + describe | `SchemaSnapshot` |
+| C22 | `src/understand/dependencies` | Typed dependency graph with evidence + confidence per edge; Dependency-API rows folded in as cross-check (AD-28, AD-30) | Python | Components + schema + CMT + API rows | `DependencyGraph` |
+| C23 | `src/understand/impact` | Where-used, change closure, OoE-ordered save impact, unused fields, legacy automation | Python | `DependencyGraph` | Impact answers |
 
 ## 3. Data Flow Sequence
 
-**Extract (one-time per org):**
-1. Operator runs `offramp extract --org <alias>` against a customer SF org.
-2. C1 invokes Salto + sf CLI + Tooling API in parallel; reconciler merges with documented precedence rules.
-3. C2 reads CMTs → resolves dispatch edges. C3 parses LWC bundles. C4 audits OoE step exercise per component.
-4. Each Component is hashed, written to Postgres, and anchored in Engram (C17).
-5. Coverage report emitted to `out/<org>/extract/coverage.html`.
+**Extract (per scan):**
+1. Operator runs `offramp extract --org <alias>` (REST/Tooling via the MCP gateway), `--org <alias> --via sf-cli`, or `--source-dir <sfdx project>`.
+2. C1 pulls raw records; C19 reads any directory-shaped source; the reconciler merges multi-source records with documented precedence.
+3. C20 analyzes Apex; the Flow extractor normalizes every element type; formula references are extracted for rules, fields, and workflow actions. C2 reads CMTs → dispatch edges. C3 classifies LWC bundles. C21 builds the schema snapshot. C4 audits OoE step exercise.
+4. C22 builds the dependency graph and folds in `MetadataComponentDependency` rows as a cross-check. Each Component is hashed and anchored in Engram (C17).
+5. `components.json`, `schema.json`, `graph.json`, `impact_summary.json`, `coverage.json`, `ooe_surface_audit.json` written to `out/<org>/`.
 
 **Understand (per X-Ray engagement):**
-1. Component records loaded into FalkorDB as typed nodes.
-2. C5 runs Leiden clustering → BusinessProcess nodes; LLM annotation pass produces summaries + complexity scores. Every annotation Engram-anchored with prompt+model+output.
-3. C6 resolves orphans across 6 channels.
-4. X-Ray report rendered (interactive HTML + PDF + JSON export).
+1. The dependency graph is loaded into FalkorDB (optional; `--no-graph-db` runs in memory).
+2. C5 runs Louvain (Leiden optional) over the full graph → BusinessProcess clusters that include the objects and fields the automation shares; optional LLM annotation pass, Engram-anchored.
+3. C6 resolves orphans using graph callers plus six external channels; C23 computes where-used, save impact, unused fields, and legacy automation.
+4. X-Ray report rendered (HTML with a where-used explorer + JSON schema 2.0). `offramp impact` answers ad-hoc questions from `graph.json`.
 
 **Generate (per migrated process):**
 1. Operator selects a process from the X-Ray report.
@@ -196,6 +201,11 @@ These supplements address the [research.md Appendix A](research.md#appendix-a-re
 | AD-24 | MCP gateway implements per-process API quota allocation + `/limits` polling. Surface utilization in observability stack. | §9.7 of v2.1 plan |
 | AD-25 | JWT cert rotation runbook + automated quarterly rotation test in sandbox. Phase 0 deliverable. | §17.2 of v2.1 plan |
 | AD-26 | Pin SF API version to 66.0 (Spring '26); upgrade cadence one release behind GA. | R6 of v2.1 plan |
+| AD-27 | X-Ray first: `generate`, `validate`, `cutover` stay in-tree, not extended, until X-Ray has paying customers. | build-plan v0.2 |
+| AD-28 | Own parsers produce every edge; `MetadataComponentDependency` is a cross-check (Beta, 2,000-row cap, unfilterable by name). | C22 |
+| AD-29 | Two extraction paths, REST/Tooling first (`extract/pull/tooling_api`), sf CLI second (`extract/pull/sf_cli`); both feed C19. | C1 |
+| AD-30 | Every edge carries `evidence` + `confidence`, surfaced in the X-Ray report. | C22, C23 |
+| AD-31 | No summit-ast; tokenizer analyzer behind the `ApexAnalysis` contract, grammar parser is a year-two swap. | C20 |
 
 ## 8. File Structure (target)
 

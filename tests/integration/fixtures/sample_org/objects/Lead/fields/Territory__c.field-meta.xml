@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Territory__c</fullName>
+    <label>Territory</label>
+    <type>Lookup</type>
+    <referenceTo>Territory__c</referenceTo>
+    <relationshipName>Leads</relationshipName>
+</CustomField>

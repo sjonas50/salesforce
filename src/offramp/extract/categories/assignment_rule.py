@@ -1,86 +1,89 @@
-"""Assignment Rule extractor (Lead + Case routing).
-
-Parses ``assignmentRules/<Object>.assignmentRules-meta.xml``. Each file
-contains multiple ``<assignmentRule>`` blocks per sObject, each with
-ordered ``<ruleEntries>`` evaluated top-to-bottom — the first matching
-entry sets the OwnerId.
-"""
+"""Assignment Rule extractor (Lead + Case routing)."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from offramp.core.models import CategoryName
 from offramp.extract.categories.base import CategoryExtractor, register
-from offramp.extract.categories.xml_utils import parse_xml
+from offramp.extract.categories.xml_utils import (
+    as_bool,
+    as_list,
+    as_str,
+    criteria_fields,
+    criteria_items,
+    get_body,
+    object_from_path,
+)
 from offramp.extract.pull.reconciler import ReconciledRecord
+from offramp.generate.formula.references import extract_references
 
 
 @register
 class AssignmentRuleExtractor(CategoryExtractor):
-    """Lead/Case AssignmentRules -> canonical dict per sObject."""
+    """Lead/Case AssignmentRules → canonical dict per sObject."""
 
-    category = CategoryName.ASSIGNMENT_RULE
+    category: ClassVar[CategoryName] = CategoryName.ASSIGNMENT_RULE
 
     def parse_payload(self, record: ReconciledRecord) -> dict[str, Any]:
-        raw = record.payload.get("raw_xml")
-        if not isinstance(raw, str):
-            raise ValueError(f"Assignment rule {record.api_name} missing raw_xml")
-        parsed = parse_xml(raw)
-        body = parsed.get("AssignmentRules", {})
-        if not isinstance(body, dict):
-            raise ValueError(f"Assignment rule {record.api_name} XML root malformed")
-
-        path = record.payload.get("path", "")
-        sobject = ""
-        parts = path.split("/")
-        if parts and parts[-1].endswith(".assignmentRules-meta.xml"):
-            sobject = parts[-1][: -len(".assignmentRules-meta.xml")]
-
-        groups = _as_list(body.get("assignmentRule"))
+        body = get_body(record, "AssignmentRules")
+        sobject = (
+            as_str(record.payload.get("object_from_path"))
+            or object_from_path(as_str(record.payload.get("path")))
+            or record.api_name
+        )
+        groups = [
+            _normalize_group(g) for g in as_list(body.get("assignmentRule")) if isinstance(g, dict)
+        ]
+        fields: set[str] = set()
+        globals_: set[str] = set()
+        templates: set[str] = set()
+        for g in groups:
+            for e in g["entries"]:
+                for f in criteria_fields(e["criteria_items"]):
+                    fields.add(f if "." in f else f"{sobject}.{f}")
+                if e["formula"]:
+                    refs = extract_references(e["formula"])
+                    fields.update(refs.qualified_fields(sobject))
+                    globals_.update(refs.globals)
+                if e["template"]:
+                    templates.add(e["template"])
         return {
             "object": sobject,
-            "rule_groups": [_normalize_group(g) for g in groups if isinstance(g, dict)],
+            "rule_groups": groups,
+            "references": {
+                "objects": [sobject],
+                "fields": sorted(fields | {f"{sobject}.OwnerId"}, key=str.lower),
+                "fields_written": [f"{sobject}.OwnerId"],
+                "globals": sorted(globals_),
+                "email_templates": sorted(templates),
+                "assignees": sorted(
+                    {e["assigned_to"] for g in groups for e in g["entries"] if e["assigned_to"]}
+                ),
+            },
         }
 
 
-def _as_list(v: Any) -> list[Any]:
-    if v is None:
-        return []
-    if isinstance(v, list):
-        return v
-    return [v]
-
-
 def _normalize_group(g: dict[str, Any]) -> dict[str, Any]:
-    entries = _as_list(g.get("ruleEntries"))
     return {
-        "name": g.get("fullName", ""),
-        "active": _bool(g.get("active", "true")),
-        # The first matching entry wins — preserve XML order.
-        "entries": [_normalize_entry(e) for e in entries if isinstance(e, dict)],
+        "name": as_str(g.get("fullName")),
+        "active": as_bool(g.get("active"), True),
+        "entries": [
+            _normalize_entry(e)
+            for e in as_list(g.get("ruleEntry")) + as_list(g.get("ruleEntries"))
+            if isinstance(e, dict)
+        ],
     }
 
 
 def _normalize_entry(e: dict[str, Any]) -> dict[str, Any]:
-    criteria_items = _as_list(e.get("criteriaItems"))
     return {
-        "assigned_to": e.get("assignedTo", ""),
-        "assigned_to_type": e.get("assignedToType", "User"),  # User | Queue
-        "formula": e.get("formula", "") or None,  # mutually exclusive with criteriaItems
-        "criteria_items": [
-            {
-                "field": c.get("field", ""),
-                "operation": c.get("operation", ""),
-                "value": c.get("value", ""),
-            }
-            for c in criteria_items
-            if isinstance(c, dict)
-        ],
-        "team": e.get("team", ""),
-        "template": e.get("template", ""),
+        "assigned_to": as_str(e.get("assignedTo")),
+        "assigned_to_type": as_str(e.get("assignedToType"), "User"),
+        "formula": as_str(e.get("formula")) or None,
+        "boolean_filter": as_str(e.get("booleanFilter")),
+        "criteria_items": criteria_items(e.get("criteriaItems")),
+        "team": as_str(e.get("team")),
+        "template": as_str(e.get("template")),
+        "overwrite_existing_teams": as_bool(e.get("overwriteExistingTeams")),
     }
-
-
-def _bool(s: Any) -> bool:
-    return str(s).lower() == "true"

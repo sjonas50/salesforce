@@ -15,6 +15,7 @@ import os
 import subprocess
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -50,20 +51,11 @@ def _has_anthropic_key() -> bool:
     return False
 
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(not _has_falkordb(), reason="FalkorDB not reachable"),
-]
+pytestmark = [pytest.mark.integration]
 
 
-def test_xray_skip_annotations_runs_end_to_end(tmp_path: Path) -> None:
-    """Cheap path: full xray pipeline without LLM calls.
-
-    Validates everything except the annotation subsystem; runs in <2s and
-    proves the FalkorDB integration + clustering + report rendering shape.
-    """
-    out_dir = tmp_path / "xray"
-    rc = subprocess.call(
+def _run_xray(out_dir: Path, *extra: str) -> int:
+    return subprocess.call(
         [
             "uv",
             "run",
@@ -73,28 +65,56 @@ def test_xray_skip_annotations_runs_end_to_end(tmp_path: Path) -> None:
             str(FIXTURE),
             "--out",
             str(out_dir),
-            "--graph-name",
-            f"test_xray_{uuid.uuid4().hex[:8]}",
             "--skip-annotations",
+            *extra,
         ],
     )
-    assert rc == 0, f"offramp xray exited {rc}"
+
+
+def _check_payload(out_dir: Path) -> dict[str, Any]:
     html = out_dir / "xray.html"
     js = out_dir / "xray.json"
     assert html.is_file() and html.stat().st_size > 0
     assert js.is_file() and js.stat().st_size > 0
-
-    payload = json.loads(js.read_text())
-    assert payload["schema_version"] == "1.0"
+    payload: dict[str, Any] = json.loads(js.read_text())
+    assert payload["schema_version"] == "2.0"
     assert payload["org_alias"] == FIXTURE.name
     assert len(payload["components"]) > 0
-    # At least one cluster detected.
     assert len(payload["business_processes"]) > 0
-    # OoE audit included with all 21 steps.
     assert len(payload["ooe_surface_audit"]) == 21
+    stats = payload["graph"]["stats"]
+    assert stats["edges"] > 100 and len(stats["by_evidence"]) >= 8
+    assert payload["summary"]["unused_custom_fields"] >= 1
+    assert payload["summary"]["legacy_automation"] >= 2
+    assert any(si["object"] == "Lead" for si in payload["save_impacts"])
+    text = html.read_text()
+    for section in (
+        "Where is this used",
+        "Save impact",
+        "Unused custom fields",
+        "Legacy automation",
+    ):
+        assert section in text
+    return payload
+
+
+def test_xray_in_memory_runs_end_to_end(tmp_path: Path) -> None:
+    """No FalkorDB, no LLM: the whole X-Ray pipeline in memory."""
+    out_dir = tmp_path / "xray"
+    assert _run_xray(out_dir, "--no-graph-db") == 0
+    _check_payload(out_dir)
+    assert subprocess.call(["uv", "run", "python", "scripts/verify_xray.py", str(out_dir)]) == 0
+
+
+@pytest.mark.skipif(not _has_falkordb(), reason="FalkorDB not reachable")
+def test_xray_with_falkordb(tmp_path: Path) -> None:
+    out_dir = tmp_path / "xray"
+    assert _run_xray(out_dir, "--graph-name", f"test_xray_{uuid.uuid4().hex[:8]}") == 0
+    _check_payload(out_dir)
 
 
 @pytest.mark.skipif(not _has_anthropic_key(), reason="ANTHROPIC_API_KEY not set")
+@pytest.mark.skipif(not _has_falkordb(), reason="FalkorDB not reachable")
 def test_xray_with_real_annotations(tmp_path: Path) -> None:
     """Hit the real Sonnet 4.6 API on a small subset to prove the harness works.
 

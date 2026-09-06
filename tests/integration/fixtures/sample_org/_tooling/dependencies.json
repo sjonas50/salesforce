@@ -1,0 +1,50 @@
+[
+    {
+        "MetadataComponentType": "Flow",
+        "MetadataComponentName": "LeadRouting",
+        "RefMetadataComponentType": "ApexClass",
+        "RefMetadataComponentName": "LeadScoringService"
+    },
+    {
+        "MetadataComponentType": "Flow",
+        "MetadataComponentName": "LeadRouting",
+        "RefMetadataComponentType": "CustomField",
+        "RefMetadataComponentName": "Lead.Country__c"
+    },
+    {
+        "MetadataComponentType": "ApexClass",
+        "MetadataComponentName": "LeadRoutingHandler",
+        "RefMetadataComponentType": "ApexClass",
+        "RefMetadataComponentName": "LeadScoringService"
+    },
+    {
+        "MetadataComponentType": "ApexClass",
+        "MetadataComponentName": "LeadRoutingHandler",
+        "RefMetadataComponentType": "CustomField",
+        "RefMetadataComponentName": "Territory__c.Owner__c"
+    },
+    {
+        "MetadataComponentType": "Layout",
+        "MetadataComponentName": "Lead-Lead Layout",
+        "RefMetadataComponentType": "CustomField",
+        "RefMetadataComponentName": "Lead.Legacy_Segment__c"
+    },
+    {
+        "MetadataComponentType": "ValidationRule",
+        "MetadataComponentName": "Lead.Email_Required",
+        "RefMetadataComponentType": "CustomField",
+        "RefMetadataComponentName": "Lead.Email"
+    },
+    {
+        "MetadataComponentType": "Layout",
+        "MetadataComponentName": "Opportunity-Opportunity Layout",
+        "RefMetadataComponentType": "CustomField",
+        "RefMetadataComponentName": "Opportunity.Legacy_Notes__c"
+    },
+    {
+        "MetadataComponentType": "Report",
+        "MetadataComponentName": "Pipeline_by_Segment",
+        "RefMetadataComponentType": "CustomField",
+        "RefMetadataComponentName": "Lead.Legacy_Segment__c"
+    }
+]
