@@ -45,6 +45,12 @@ def add_source_args(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument("--org-alias", default=None, help="Override the org label used in outputs.")
     p.add_argument(
+        "--auth",
+        choices=["jwt", "sf-cli"],
+        default=None,
+        help="With --org: JWT bearer via Connected App (default, SF_AUTH_MODE) or the sf CLI's session.",
+    )
+    p.add_argument(
         "--no-schema",
         action="store_true",
         help="Skip describe-based schema extraction (faster; fewer edges).",
@@ -94,7 +100,10 @@ async def connect(args: argparse.Namespace, engram: EngramClient) -> ConnectedSo
     from offramp.mcp.server import MCPGateway
     from offramp.mcp.sf_backend import SimpleSalesforceBackend
 
-    sf_settings = settings.salesforce.model_copy(update={"org_alias": args.org})
+    updates: dict[str, Any] = {"org_alias": args.org}
+    if args.auth:
+        updates["auth_mode"] = args.auth
+    sf_settings = settings.salesforce.model_copy(update=updates)
     # CLI scans run unmetered; the hosted service attaches a QuotaAllocator here.
     backend = SimpleSalesforceBackend(settings=sf_settings, process_id="xray", quota=None)
     gateway = MCPGateway(backend=backend, engram=engram)

@@ -26,7 +26,7 @@
         <name>VP_Review</name>
         <label>VP Review</label>
         <assignedApprover>
-            <approver><type>user</type><name>vp.sales@example.com</name></approver>
+            <approver><type>relatedUserField</type><name>Owner</name></approver>
         </assignedApprover>
         <entryCriteria>
             <formula>Discount__c &gt; 35 || Amount &gt; 500000</formula>

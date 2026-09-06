@@ -19,8 +19,8 @@
             <template>unfiled$public/Lead_Assigned</template>
         </ruleEntry>
         <ruleEntry>
-            <assignedTo>enterprise.rep@example.com</assignedTo>
-            <assignedToType>User</assignedToType>
+            <assignedTo>Inside_Sales</assignedTo>
+            <assignedToType>Queue</assignedToType>
             <formula>AnnualRevenue &gt;= 1000000 &amp;&amp; ISPICKVAL(Legacy_Segment__c, "Enterprise")</formula>
         </ruleEntry>
     </assignmentRule>

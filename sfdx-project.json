@@ -1,0 +1,9 @@
+{
+  "packageDirectories": [
+    { "path": "tests/integration/fixtures/sample_org", "default": true }
+  ],
+  "name": "offramp-fixture-org",
+  "namespace": "",
+  "sfdcLoginUrl": "https://login.salesforce.com",
+  "sourceApiVersion": "62.0"
+}

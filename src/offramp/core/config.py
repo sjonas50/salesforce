@@ -19,6 +19,9 @@ class SalesforceSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SF_", env_file=".env", extra="ignore")
 
     org_alias: str = "dev_scratch"
+    # jwt: Connected App + private key (production). sf-cli: reuse the session the
+    # Salesforce CLI already holds for ``org_alias`` (scratch orgs, local runs).
+    auth_mode: Literal["jwt", "sf-cli"] = "jwt"
     login_url: str = "https://login.salesforce.com"
     client_id: SecretStr = SecretStr("")
     username: str = "integration@example.com"

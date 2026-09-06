@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EmailTemplate xmlns="http://soap.sforce.com/2006/04/metadata">
+    <available>true</available>
+    <encodingKey>UTF-8</encodingKey>
+    <name>Web Lead Auto Reply</name>
+    <style>none</style>
+    <subject>Web Lead Auto Reply</subject>
+    <textOnly>Automated message: Web_Lead_Auto_Reply</textOnly>
+    <type>text</type>
+    <uiType>Aloha</uiType>
+</EmailTemplate>

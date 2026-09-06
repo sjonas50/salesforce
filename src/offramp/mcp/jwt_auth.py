@@ -38,7 +38,10 @@ Security properties enforced:
 from __future__ import annotations
 
 import asyncio
+import json
+import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -206,6 +209,10 @@ class SessionCache:
             self._http = None
 
     async def _exchange(self) -> Session:
+        if self.settings.auth_mode == "sf-cli":
+            return await asyncio.get_running_loop().run_in_executor(
+                None, sf_cli_session, self.settings.org_alias
+            )
         private_key_pem = _read_pem(self.settings.jwt_key_path)
         assertion = build_jwt_assertion(
             client_id=self.settings.client_id.get_secret_value(),
@@ -221,6 +228,44 @@ class SessionCache:
             token_url=token_url,
             http_client=self._http,
         )
+
+
+def sf_cli_session(org_alias: str, *, runner: Callable[[list[str]], str] | None = None) -> Session:
+    """Borrow the access token the Salesforce CLI holds for ``org_alias``.
+
+    ``sf org display --json`` prints ``accessToken`` and ``instanceUrl`` for any
+    org the CLI has authorized (scratch orgs get one at creation). No Connected
+    App is needed, which makes this the fastest way to point X-Ray at a scratch
+    org; production runs still use the JWT bearer flow.
+    """
+    argv = ["sf", "org", "display", "--target-org", org_alias, "--json"]
+    run = runner or _run_capture
+    try:
+        out = run(argv)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise JWTAuthError(
+            f"sf CLI session lookup failed for {org_alias!r}: {exc}. "
+            "Is the sf CLI installed and the org authorized (`sf org list`)?"
+        ) from exc
+    try:
+        payload = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise JWTAuthError(f"sf org display returned non-JSON output for {org_alias!r}") from exc
+    result = payload.get("result") or {}
+    token = result.get("accessToken")
+    instance = result.get("instanceUrl")
+    if not token or not instance:
+        raise JWTAuthError(
+            f"sf org display for {org_alias!r} has no accessToken/instanceUrl "
+            f"(status={payload.get('status')}, message={payload.get('message')!r})"
+        )
+    log.info("mcp.jwt_auth.sf_cli_session", org=org_alias, instance_url=instance)
+    return Session(access_token=str(token), instance_url=str(instance).rstrip("/"))
+
+
+def _run_capture(argv: list[str]) -> str:
+    proc = subprocess.run(argv, capture_output=True, text=True, check=True)
+    return proc.stdout
 
 
 def _read_pem(path: Path) -> bytes:
@@ -263,4 +308,5 @@ __all__ = [
     "build_jwt_assertion",
     "exchange_assertion",
     "session_id",
+    "sf_cli_session",
 ]
