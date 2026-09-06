@@ -62,7 +62,7 @@ def add_kg_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
 
     sh = ops.add_parser("show")
     sh.add_argument("key", help="Process id, id prefix, or name")
-    sh.add_argument("--format", choices=["md", "mermaid", "json", "code"], default="md")
+    sh.add_argument("--format", choices=["md", "mermaid", "json", "code", "flowxml"], default="md")
     sh.set_defaults(func=_show)
 
     ops.add_parser("families").set_defaults(func=_families)
@@ -160,6 +160,10 @@ def _show(args: argparse.Namespace) -> int:
         return 2
     if args.format == "json":
         print(p.model_dump_json(indent=2))
+    if args.format == "flowxml":
+        from offramp.knowledge.flow_xml import to_flow_xml
+
+        print(to_flow_xml(p))
     elif args.format == "mermaid":
         print(to_mermaid(p))
     elif args.format == "code":

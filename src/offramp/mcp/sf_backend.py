@@ -188,6 +188,15 @@ class SimpleSalesforceBackend:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: sf.restful(path, params))
 
+    async def request(self, method: str, path: str, json: Any | None = None) -> Any:
+        """Non-GET call: ``sf.restful(path, method=..., json=...)`` (REST and Tooling paths)."""
+        await self._charge_quota()
+        sf = await self.connect()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: sf.restful(path, method=method.upper(), json=json)
+        )
+
     async def mdapi_retrieve(
         self,
         unpackaged: dict[str, list[str]],
@@ -223,6 +232,44 @@ class SimpleSalesforceBackend:
             if waited >= timeout_seconds:
                 raise TimeoutError(
                     f"Metadata API retrieve {async_id} still {state} after {timeout_seconds}s"
+                )
+            await asyncio.sleep(poll_seconds)
+            waited += poll_seconds
+
+    async def mdapi_deploy(
+        self, zip_bytes: bytes, *, poll_seconds: float = 3.0, timeout_seconds: float = 600.0
+    ) -> dict[str, Any]:
+        """SOAP Metadata API deploy: submit the ZIP, poll ``checkDeployStatus``."""
+        import tempfile
+
+        await self._charge_quota()
+        sf = await self.connect()
+        loop = asyncio.get_running_loop()
+        mdapi = sf.mdapi
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as fh:
+            fh.write(zip_bytes)
+            path = fh.name
+        async_id, state = await loop.run_in_executor(
+            None,
+            lambda: mdapi.deploy(path, sandbox=False, rollbackOnError=True, singlePackage=True),
+        )
+        waited = 0.0
+        while True:
+            state, state_detail, messages, _ = await loop.run_in_executor(
+                None, lambda: mdapi.check_deploy_status(async_id)
+            )
+            if state in {"Succeeded", "SucceededPartial"}:
+                return {"status": state, "id": async_id, "messages": messages}
+            if state in {"Failed", "Canceled", "Error"}:
+                return {
+                    "status": state,
+                    "id": async_id,
+                    "messages": messages,
+                    "detail": state_detail,
+                }
+            if waited >= timeout_seconds:
+                raise TimeoutError(
+                    f"Metadata API deploy {async_id} still {state} after {timeout_seconds}s"
                 )
             await asyncio.sleep(poll_seconds)
             waited += poll_seconds

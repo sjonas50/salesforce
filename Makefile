@@ -1,7 +1,7 @@
 # Salesforce Off-Ramp — developer workflow targets.
 # All commands run via `uv run` so no pre-activated venv is needed.
 
-.PHONY: help dev sync falkordb falkordb-stop test test-unit test-integration test-ooe lint lint-fix typecheck smoke clean refresh-fixtures hooks xray-fixture gate
+.PHONY: help dev sync falkordb falkordb-stop falkordb-browser falkordb-browser-stop test test-unit test-integration test-ooe lint lint-fix typecheck smoke clean refresh-fixtures hooks xray-fixture gate
 
 help:  ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -34,6 +34,38 @@ falkordb: $(FALKORDB_SO)  ## Start FalkorDB (Redis + module) on localhost:6379 i
 
 falkordb-stop:  ## Stop the local FalkorDB.
 	@redis-cli shutdown 2>/dev/null || true
+
+# FalkorDB Browser (the web UI the Docker image bundles) from source: Node + Next.js.
+FALKORDB_BROWSER_DIR ?= $(FALKORDB_DIR)/falkordb-browser
+FALKORDB_BROWSER_PORT ?= 3000
+
+$(FALKORDB_BROWSER_DIR)/package.json:
+	@command -v npm >/dev/null || { echo "npm missing: install Node (brew install node)"; exit 1; }
+	@mkdir -p $(FALKORDB_DIR)
+	git clone -q --depth 1 https://github.com/FalkorDB/falkordb-browser.git $(FALKORDB_BROWSER_DIR)
+
+$(FALKORDB_BROWSER_DIR)/node_modules: $(FALKORDB_BROWSER_DIR)/package.json
+	cd $(FALKORDB_BROWSER_DIR) && npm install --silent
+
+$(FALKORDB_BROWSER_DIR)/.env.local: $(FALKORDB_BROWSER_DIR)/package.json
+	@cd $(FALKORDB_BROWSER_DIR) && cp .env.local.template .env.local && \
+	  sed -i '' "s|^AUTH_SECRET=.*|AUTH_SECRET=$$(openssl rand -hex 32)|; \
+	             s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=\"$$(openssl rand -hex 32)\"|; \
+	             s|^PORT=.*|PORT=$(FALKORDB_BROWSER_PORT)|; \
+	             s|^AUTH_URL=.*|AUTH_URL=http://localhost:$(FALKORDB_BROWSER_PORT)/|; \
+	             s|^ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=http://localhost:$(FALKORDB_BROWSER_PORT)|" .env.local
+
+falkordb-browser: falkordb $(FALKORDB_BROWSER_DIR)/node_modules $(FALKORDB_BROWSER_DIR)/.env.local  ## Open the FalkorDB Browser UI on localhost:3000 (connect with host localhost, port 6379, no credentials).
+	@if curl -s -o /dev/null http://localhost:$(FALKORDB_BROWSER_PORT)/; then echo "browser already running"; else \
+	  cd $(FALKORDB_BROWSER_DIR) && (nohup npm run dev > $(FALKORDB_DIR)/browser.log 2>&1 & echo $$! > $(FALKORDB_DIR)/browser.pid); \
+	  for i in $$(seq 1 60); do curl -s -o /dev/null http://localhost:$(FALKORDB_BROWSER_PORT)/ && break; sleep 2; done; fi
+	@echo "FalkorDB Browser: http://localhost:$(FALKORDB_BROWSER_PORT)/  (host localhost, port 6379, no user/password)"
+	@command -v open >/dev/null && open http://localhost:$(FALKORDB_BROWSER_PORT)/ || true
+
+falkordb-browser-stop:  ## Stop the FalkorDB Browser dev server.
+	@[ -f $(FALKORDB_DIR)/browser.pid ] && pkill -P $$(cat $(FALKORDB_DIR)/browser.pid) 2>/dev/null; \
+	  [ -f $(FALKORDB_DIR)/browser.pid ] && kill $$(cat $(FALKORDB_DIR)/browser.pid) 2>/dev/null; \
+	  rm -f $(FALKORDB_DIR)/browser.pid; pkill -f "next dev" 2>/dev/null || true
 
 test: test-unit  ## Run the default test suite (unit only — fast).
 

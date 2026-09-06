@@ -23,6 +23,7 @@ When the strategic plan and the engineering architecture disagree, **the archite
 ```bash
 make dev          # uv sync, install pre-commit hooks, start local FalkorDB
 make falkordb     # FalkorDB without Docker: brew redis + module from GitHub releases, persisted in ~/.local/share/offramp
+make falkordb-browser  # FalkorDB Browser UI (from source, Node) on http://localhost:3000; connect to localhost:6379
 make test         # pytest unit + integration
 make lint         # ruff format + ruff check
 make typecheck    # mypy --strict
@@ -35,6 +36,9 @@ CLI entry points (added incrementally per phase):
 ```bash
 uv run offramp extract --org <alias> --out <dir>
 uv run offramp xray --org <alias> --out <dir>
+uv run offramp compare --a <extract-dir> --b <extract-dir> [--a-is-subset]   # repo vs org diff (C25)
+uv run offramp verify --from <extract-dir> --org <alias> --recipes config/verify_recipes.example.json [--roundtrip]   # trace validation (C26)
+uv run offramp verify --from <extract-dir> --log <apex-debug-log>   # offline, from a saved log
 uv run offramp generate --process <id> --out <dir>
 uv run offramp deploy --artifact <dir> --target <env>
 uv run offramp shadow start --process <id>
@@ -130,6 +134,7 @@ These are the things that will silently bite. **Read these before writing code t
 26. **SFDX source trees are multi-root and contain decoys.** `sfdx-project.json` lists several `packageDirectories`, each with its own `main/default`, and one object can be split across them (Easy Spaces defines `Reservation__c` in `es-base-objects` and adds fields in `es-base-code`); `.git/objects` looks like a metadata `objects/` folder to a naive glob. `SourceTree.roots` reads every package root, merges split objects, and skips `.git`/`node_modules`/`.sfdx`/`.sf`. Custom metadata *records* live in `customMetadata/<Type>.<Record>.md-meta.xml` and are read by `read_cmt_records_from_source`.
 27. **`FieldDefinition.DataType` reports metadata-relationship fields as `Picklist()`**, so the FLS-independent schema supplement cannot see that `Customer_Fields__mdt.Customer_City__c` points at `FieldDefinition`; the source path (field XML with `referenceTo`) can. Fetch the Tooling `CustomField.Metadata` for `MetadataRelationship` fields when the org path needs the target.
 28. **Lightning Message Service is a dependency channel.** `@salesforce/messageChannel/X__c` imports plus `publish`/`subscribe` couple LWCs that never import each other (four Easy Spaces bundles share two channels). Modelled as an external `LightningMessageChannel` node with an edge from every bundle on it. Flows reference UI in two more ways — `extensionName` on screen fields and `actionType=component` actions — both now `lwc_bundles` references; when the name is an Aura bundle it stays unresolved by design.
+29. **Validation is three layers, and only the third is behavioural.** (1) Structural: two extraction paths reconciled, the Dependency API cross-check, evidence + confidence per edge, fidelity + notes per process definition. (2) Differential: `offramp compare` diffs two extract outputs component by component (repo vs org with `--a-is-subset`; schema-only edge differences are expected and reported apart). (3) Behavioural: `offramp verify` runs a flow in the org under a debug trace (`DebugLevel` Workflow=FINER via Tooling POST, `TraceFlag` on the traced user, DML from a recipe or the Flow REST action, `ApexLog` body) and checks the visited elements, their kinds, the transitions and the DML against the `ProcessDefinition`; `--roundtrip` renders the definition back to Flow XML (`knowledge/flow_xml.py`), deploys it as `<Name>_rt` and requires the copy to take the same path with the same DML. Debug logs name flows by **label**, not API name, and screen flows cannot be driven headlessly. The renderer's identity test (`tests/unit/test_flow_roundtrip.py`) ignores labels: Salesforce requires them on deploy, the model treats them as cosmetic.
 
 ## Conventions
 

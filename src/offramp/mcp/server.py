@@ -43,7 +43,9 @@ class SalesforceBackend(Protocol):
     async def describe_global(self) -> dict[str, Any]: ...
     async def tooling_query(self, soql: str) -> dict[str, Any]: ...
     async def restful(self, path: str, params: dict[str, Any] | None = None) -> Any: ...
+    async def request(self, method: str, path: str, json: Any | None = None) -> Any: ...
     async def mdapi_retrieve(self, unpackaged: dict[str, list[str]]) -> bytes: ...
+    async def mdapi_deploy(self, zip_bytes: bytes) -> dict[str, Any]: ...
     async def mdapi_list(self, metadata_type: str, folder: str | None = None) -> list[str]: ...
 
 
@@ -64,6 +66,9 @@ class InMemorySalesforceBackend:
     # Metadata API stand-in: a ZIP the retrieve returns, and folder listings.
     mdapi_zip: bytes = b""
     mdapi_folders: dict[str, list[str]] = field(default_factory=dict)
+    responses: dict[tuple[str, str], Any] = field(default_factory=dict)
+    deployed: list[bytes] = field(default_factory=list)
+    requests: list[tuple[str, str, Any]] = field(default_factory=list)
 
     async def query(self, soql: str) -> dict[str, Any]:
         log.debug("mcp.in_memory.query", soql=soql)
@@ -151,6 +156,24 @@ class InMemorySalesforceBackend:
             }
         return {}
 
+    async def request(self, method: str, path: str, json: Any | None = None) -> Any:
+        """Canned non-GET REST/Tooling calls: ``responses[(METHOD, path)]``; every call is
+        appended to ``requests`` so tests can assert what the runner did."""
+        self.requests.append((method.upper(), path, json))
+        key = (method.upper(), path)
+        if key in self.responses:
+            return self.responses[key]
+        if method.upper() == "POST" and "/sobjects/" in path:
+            return {
+                "id": f"{path.rsplit('/', 1)[-1][:3]}{len(self.requests):012d}",
+                "success": True,
+            }
+        return {}
+
+    async def mdapi_deploy(self, zip_bytes: bytes) -> dict[str, Any]:
+        self.deployed.append(zip_bytes)
+        return {"status": "Succeeded", "id": f"0Af{len(self.deployed):015d}", "errors": []}
+
     async def mdapi_retrieve(self, unpackaged: dict[str, list[str]]) -> bytes:
         log.debug("mcp.in_memory.mdapi_retrieve", types=sorted(unpackaged))
         return self.mdapi_zip
@@ -234,6 +257,23 @@ class MCPGateway:
     async def sf_restful(self, path: str, params: dict[str, Any] | None = None) -> Any:
         result = await self.backend.restful(path, params)
         await self.engram.anchor(self.component, {"tool": "sf_restful", "path": path})
+        return result
+
+    async def sf_request(self, method: str, path: str, json: Any | None = None) -> Any:
+        """Non-GET REST / Tooling call (create a TraceFlag, invoke a flow action, ...)."""
+        result = await self.backend.request(method, path, json)
+        await self.engram.anchor(
+            self.component, {"tool": "sf_request", "method": method.upper(), "path": path}
+        )
+        return result
+
+    async def sf_mdapi_deploy(self, zip_bytes: bytes) -> dict[str, Any]:
+        """Metadata API deploy of a ZIP (round-trip verification deploys rendered flows)."""
+        result = await self.backend.mdapi_deploy(zip_bytes)
+        await self.engram.anchor(
+            self.component,
+            {"tool": "sf_mdapi_deploy", "bytes": len(zip_bytes), "status": result.get("status")},
+        )
         return result
 
     async def sf_mdapi_retrieve(self, unpackaged: dict[str, list[str]]) -> bytes:

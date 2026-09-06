@@ -141,7 +141,19 @@ Gaps from that analysis, all closed the same day:
 
 Still open: re-verifying all of the above against the org once its 24 h request window resets (the fixture now carries an Aura bundle, an event, two tabs, an app and a path assistant that have not been deployed yet).
 
+## Validation (2026-09-06)
+
+Three layers, added in the order a customer would ask for them:
+
+1. **Differential** — `offramp compare` (C25, `understand/compare.py`): two extract outputs diffed component by component; parser edges in one only, process definitions whose canonical form differs, components in one only (`--a-is-subset` for a repo against the whole org). Easy Spaces source vs org: 272 agreeing edges, 10 source-only (the metadata-relationship chain), 0 org-only.
+2. **Behavioural** — `offramp verify` (C26, `verify/`): drive the flow in the org under a debug trace and compare the visited elements, element kinds, transitions and DML with the definition. Offline mode takes a saved debug log. The comparer rejected the first hand-written trace because the path did not match the fixture flow's connectors, which is the point.
+3. **Round-trip** — `offramp verify --roundtrip`: `knowledge/flow_xml.py` renders a definition back to Flow XML (`kg show --format flowxml`), the copy is deployed as `<Name>_rt` and must trace identically. Every full-fidelity fixture flow re-extracts to the same definition from its rendered XML.
+
+Live runs of 2 and 3 wait for the org's request window (recipes in `config/verify_recipes.example.json`).
+
 ## Known limitations (tracked, not yet scheduled)
+
+- `offramp verify` drives record-triggered and autolaunched flows only; screen flows, platform-event flows and approval processes need a user or an event and report `not_verifiable`.
 
 
 - The Flow component on Lightning pages (`flowruntime:flowRuntimeForFlexipage`) could not be deployed through the Metadata API in any region or template we tried, so the real-org fixture page carries fields and an LWC only; the page→flow edge is covered by an inline unit test. Build one page in App Builder, retrieve it, and diff to close this.

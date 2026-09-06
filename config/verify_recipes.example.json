@@ -1,0 +1,13 @@
+{
+  "_comment": "offramp verify --org <alias> --from out/real_org/extract --recipes config/verify_recipes.example.json [--roundtrip]. One entry per flow API name: object + create (and optional update) for record-triggered flows, inputs for autolaunched flows. Records are deleted after the run.",
+  "LeadRouting": {
+    "object": "Lead",
+    "create": {"LastName": "Verify", "Company": "Offramp Verify", "Country__c": "US", "LeadSource": "Web", "Email": "verify@example.com", "Status": "Open - Not Contacted"}
+  },
+  "SendWelcomeEmail": {
+    "inputs": {}
+  },
+  "NightlyHousekeeping": {
+    "inputs": {}
+  }
+}
