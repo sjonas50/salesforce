@@ -76,7 +76,9 @@ def test_cli_compare_round_trip(tmp_path: Path, capsys: pytest.CaptureFixture[st
     capsys.readouterr()  # drop the extract command's own output
     assert main(["compare", "--a", str(a), "--b", str(a), "--json"]) == 0
     out = capsys.readouterr().out
-    assert json.loads(out[out.index("{") :])["clean"] is True  # structlog lines precede the JSON
+    # structlog lines precede the report (and are themselves JSON under LOG_FORMAT=json);
+    # the report is the pretty-printed document starting with its "a" key.
+    assert json.loads(out[out.index('{\n  "a"') :])["clean"] is True
 
 
 def test_subset_mode_ignores_components_only_in_the_org(tmp_path: Path) -> None:

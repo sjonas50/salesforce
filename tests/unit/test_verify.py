@@ -136,7 +136,7 @@ def test_cli_offline_log_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str]
         ]
     )
     text = capsys.readouterr().out
-    results = {r["process"]: r["status"] for r in json.loads(text[text.index("[") :])}
+    results = {r["process"]: r["status"] for r in json.loads(text[text.index("[\n") :])}
     assert rc == 0 and results == {"LeadRouting": "pass", "SendWelcomeEmail": "not_verifiable"}
 
 
