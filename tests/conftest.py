@@ -12,6 +12,15 @@ from offramp.event_bus.in_memory import InMemoryEventBus
 from offramp.mcp.server import InMemorySalesforceBackend, MCPGateway
 
 
+@pytest.fixture(autouse=True)
+def _isolate_from_local_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never depend on a developer's .env (auth mode, log format, org alias)."""
+    monkeypatch.setenv("SF_AUTH_MODE", "jwt")
+    monkeypatch.setenv("SF_ORG_ALIAS", "dev_scratch")
+    monkeypatch.setenv("LOG_FORMAT", "json")
+    monkeypatch.delenv("OFFRAMP_LIBRARY", raising=False)
+
+
 @pytest_asyncio.fixture
 async def engram() -> AsyncIterator[InMemoryEngramClient]:
     yield InMemoryEngramClient()

@@ -71,6 +71,7 @@ The 20 ADs in v2.1 §3 plus these deltas from research:
 - **AD-29**: Two extraction paths, REST/Tooling first, sf CLI second; both feed `src/extract/pull/source_tree.py`
 - **AD-30**: Every edge carries `evidence` + `confidence`, surfaced in the X-Ray report
 - **AD-31**: No summit-ast; tokenizer-based Apex analysis behind the `ApexAnalysis` contract
+- **AD-32**: The knowledge library is the product asset. Every automation becomes a `ProcessDefinition` (`src/core/process.py`), stored content-addressed in `src/knowledge`; identical logic across scans/orgs is one entry. Never add Salesforce-only vocabulary to the process model when a neutral term exists.
 
 ## File structure
 
@@ -78,7 +79,8 @@ The 20 ADs in v2.1 §3 plus these deltas from research:
 src/
 ├── core/            # shared models, secrets, utils
 ├── extract/         # C1–C4, C19–C21: pull (source_tree, tooling_api, sf_cli), apex, schema, dispatch, lwc, ooe_audit
-├── understand/      # C5–C6, C22–C23: dependencies, impact, graph, annotate, cluster, orphan, xray report
+├── understand/      # C5–C6, C22–C23: dependencies, impact, process_ir, graph, annotate, cluster, orphan, xray report
+├── knowledge/       # C24: content-addressed process library (store, render, falkor) — the reusable asset (AD-32)
 ├── generate/        # C7–C9: tier1, tier2, tier3, formula, adapters
 ├── runtime/         # C10–C11: ooe state machine, rules engine
 ├── mcp/             # C12: gateway, tools, quota, anchoring

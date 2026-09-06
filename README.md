@@ -26,6 +26,7 @@ Reverse-engineer a Salesforce org into a dependency graph that shows its work: e
 | Graph | Typed dependency graph, evidence channel + confidence per edge, Dependency-API cross-check (C22). | `test_tooling_pull_client.py`, `test_extract_e2e.py` |
 | Data profile | Record counts (`limits/recordCount`) and custom-field fill rates (one aggregate query per object) attached to graph nodes. | `test_surfaces_data_mdapi.py` |
 | Impact | Where-used with live / test / inactive split, change closure, save impact in Order-of-Execution order, unused fields with fill rate and "still referenced by", legacy automation (C23). | `test_impact_and_report.py`, `test_xray_e2e.py` |
+| Process library | Every automation normalized to a platform-neutral `ProcessDefinition` (trigger, conditions, steps, data effects), content-addressed so identical logic across scans and orgs is one reusable entry; scan history, diffs, shape families, search; Markdown + Mermaid rendering; optional persistent FalkorDB mirror (C24, AD-32). | `test_knowledge.py` |
 | Report | X-Ray HTML with a where-used explorer, save-impact tables, unused / legacy sections, D3 graph; JSON schema 2.0. | `scripts/verify_xray.py` |
 | Year two (kept) | OoE runtime, Tier 1/2/3 translators, Shadow Mode, Compare Mode, cutover orchestrator. | existing suites |
 
@@ -68,6 +69,14 @@ uv run offramp impact --from out/fx --save Opportunity                  # OoE-or
 uv run offramp impact --from out/fx --change LeadScoringService --depth 3
 uv run offramp impact --from out/fx --unused
 uv run offramp impact --from out/fx --legacy
+
+# Build the reusable process library while you scan, then use it
+uv run offramp extract --fixture tests/integration/fixtures/sample_org --out out/fx --library ~/.offramp/library
+uv run offramp kg search "lead routing"
+uv run offramp kg show LeadRouting --format mermaid          # or md | json | code
+uv run offramp kg families                                    # processes that share a shape
+uv run offramp kg scans && uv run offramp kg diff <scan_a> <scan_b>
+uv run offramp kg export --out library.json
 
 # Full X-Ray report (FalkorDB and LLM annotation are optional)
 uv run offramp xray --fixture tests/integration/fixtures/sample_org --out out/xray --no-graph-db --skip-annotations

@@ -61,6 +61,12 @@ def add_source_args(p: argparse.ArgumentParser) -> None:
         help="Skip MetadataComponentDependency cross-check.",
     )
     p.add_argument(
+        "--library",
+        type=Path,
+        default=None,
+        help="Also ingest this scan into the process library at DIR (see `offramp kg`).",
+    )
+    p.add_argument(
         "--no-data-profile",
         action="store_true",
         help="Skip record counts and field fill rates.",
@@ -164,5 +170,16 @@ async def connect(args: argparse.Namespace, engram: EngramClient) -> ConnectedSo
     return ConnectedSource(alias, orch, backend.aclose)
 
 
-def write_result(result: ExtractRunResult, out: Path) -> None:
+def write_result(result: ExtractRunResult, out: Path, *, library: Path | None = None) -> None:
     result.write(out)
+    if library is not None:
+        from offramp.cli.kg import ingest_extract_dir
+        from offramp.knowledge.store import KnowledgeStore
+
+        rec, _ = ingest_extract_dir(KnowledgeStore(library), out, org_alias=result.org_alias)
+        log.info(
+            "cli.library_ingested",
+            library=str(library),
+            scan=rec.scan_id,
+            new=len(rec.new_process_ids),
+        )

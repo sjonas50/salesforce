@@ -41,7 +41,7 @@ async def _run_async(args: argparse.Namespace) -> int:
         )
         write_result(result, args.out)
         return 4
-    write_result(result, args.out)
+    write_result(result, args.out, library=args.library)
     graph = result.build_graph()
     log.info(
         "extract.cli.done",

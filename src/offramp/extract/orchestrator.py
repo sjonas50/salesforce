@@ -280,6 +280,20 @@ class ExtractRunResult:
             (out_dir / "data_profile.json").write_text(
                 self.data_profile.model_dump_json(indent=2), encoding="utf-8"
             )
+        from offramp.understand.process_ir import (
+            build_processes,
+        )  # local: keeps extract importable alone
+
+        processes = build_processes(self.components, org_alias=self.org_alias)
+        (out_dir / "processes.json").write_text(
+            json.dumps(
+                [p.model_dump(mode="json") for p in processes],
+                indent=1,
+                sort_keys=True,
+                default=str,
+            ),
+            encoding="utf-8",
+        )
         graph = self.build_graph()
         (out_dir / "graph.json").write_text(
             json.dumps(graph.to_jsonable(), indent=2, sort_keys=True), encoding="utf-8"

@@ -69,7 +69,7 @@ async def _run_async(args: argparse.Namespace) -> int:
         finally:
             await src.close()
         org_alias = src.org_alias
-        write_result(result, args.out / "extract")
+        write_result(result, args.out / "extract", library=args.library)
 
         graph = result.build_graph()
         log.info(

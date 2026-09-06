@@ -87,6 +87,7 @@
 | C20 | `src/extract/apex` | Tokenizer-based Apex static analysis: class graph, SOQL/DML targets, field writes, callouts, entry points (AD-31) | Python | `.cls` / `.trigger` source | `ApexAnalysis` |
 | C21 | `src/extract/schema` | Data model from source tree and/or REST describe | Python | objects/, describeGlobal + describe | `SchemaSnapshot` |
 | C22 | `src/understand/dependencies` | Typed dependency graph with evidence + confidence per edge; Dependency-API rows folded in as cross-check (AD-28, AD-30) | Python | Components + schema + CMT + API rows | `DependencyGraph` |
+| C24 | `src/knowledge` + `src/core/process.py` | Platform-neutral `ProcessDefinition` (trigger, conditions, steps, effects) for every automation; content-addressed process library with scan history, families, search, Markdown/Mermaid rendering; persistent FalkorDB mirror (AD-32) | Python, FalkorDB (optional) | Components | Reusable process library |
 | C23 | `src/understand/impact` | Where-used, change closure, OoE-ordered save impact, unused fields, legacy automation | Python | `DependencyGraph` | Impact answers |
 
 ## 3. Data Flow Sequence
@@ -205,6 +206,7 @@ These supplements address the [research.md Appendix A](research.md#appendix-a-re
 | AD-28 | Own parsers produce every edge; `MetadataComponentDependency` is a cross-check (Beta, 2,000-row cap, unfilterable by name). | C22 |
 | AD-29 | Two extraction paths, REST/Tooling first (`extract/pull/tooling_api`), sf CLI second (`extract/pull/sf_cli`); both feed C19. | C1 |
 | AD-30 | Every edge carries `evidence` + `confidence`, surfaced in the X-Ray report. | C22, C23 |
+| AD-32 | **The knowledge graph is the product asset, not the report.** Every automation is normalized to a `ProcessDefinition` (AD-31 analyzer output feeds it at `references_only` fidelity) and stored content-addressed in the library; the same logic in two orgs or two scans is one entry with many sources. Reports are views over the library. Year-two generators consume `ProcessDefinition`, not Salesforce metadata. | C24 |
 | AD-31 | No summit-ast; tokenizer analyzer behind the `ApexAnalysis` contract, grammar parser is a year-two swap. | C20 |
 
 ## 8. File Structure (target)
