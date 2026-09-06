@@ -1,14 +1,20 @@
 """Impact analysis (C23).
 
-Answers the four product questions over a :class:`DependencyGraph`:
+Answers the product questions over a :class:`DependencyGraph`:
 
 * :func:`where_used` — every inbound reference to a node, grouped by the
-  referencing component's category, with evidence and confidence;
+  referencing component's category, with evidence, confidence, and whether
+  the referrer is a test class or inactive automation;
 * :func:`impact_closure` — everything that transitively depends on a node
   (what could break if it changes), with the path that got us there;
 * :func:`save_impact` — the automations that fire on a save to an object,
   ordered by Salesforce Order-of-Execution step;
-* :func:`unused_fields` / :func:`legacy_automation` — cleanup candidates.
+* :func:`unused_fields` / :func:`legacy_automation` — cleanup candidates,
+  with data-level evidence (fill rate, record count) when a profile exists.
+
+A reference *counts as usage* only when it comes from active, non-test
+automation or code. Test classes, inactive rules, permission sets, layouts,
+and reports are reported, never silently counted.
 """
 
 from __future__ import annotations
@@ -17,13 +23,77 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from offramp.core.models import CategoryName, Component, EvidenceChannel, SchemaSnapshot
+from offramp.core.models import (
+    AUTOMATION_CATEGORIES,
+    REPORTING_CATEGORIES,
+    SECURITY_CATEGORIES,
+    UI_CATEGORIES,
+    CategoryName,
+    Component,
+    EvidenceChannel,
+    SchemaSnapshot,
+)
 from offramp.extract.ooe_audit.audit import OoEStep, classify_steps
 from offramp.understand.dependencies import DependencyGraph, GraphNode
 
-_AUTOMATION_KINDS = {"component"}
 _UI_API_TYPES = {"layout", "flexipage", "compactlayout", "listview", "quickaction"}
 _REPORTING_API_TYPES = {"report", "dashboard"}
+_SECURITY_API_TYPES = {"permissionset", "profile"}
+_AUTOMATION_VALUES = {c.value for c in AUTOMATION_CATEGORIES}
+_UI_VALUES = {c.value for c in UI_CATEGORIES}
+_SECURITY_VALUES = {c.value for c in SECURITY_CATEGORIES}
+_REPORTING_VALUES = {c.value for c in REPORTING_CATEGORIES}
+
+UNUSED_REASON_ORDER = [
+    "no_references",
+    "test_only",
+    "inactive_only",
+    "security_only",
+    "ui_only",
+    "reporting_only",
+]
+
+
+# ---- classification helpers -----------------------------------------------------
+
+
+def _defines(e: Any) -> bool:
+    """The OWNS edge from a formula/roll-up component to the field it *is*."""
+    return bool(e.kind.value == "owns" and e.notes == "defines")
+
+
+def _is_test(n: GraphNode) -> bool:
+    return bool(n.meta.get("is_test"))
+
+
+def _is_active(n: GraphNode) -> bool:
+    return bool(n.meta.get("active", True) is not False)
+
+
+def _bucket(n: GraphNode) -> str:
+    """automation | ui | security | reporting | other, for a referencing node."""
+    if n.kind == "component":
+        if n.category in _AUTOMATION_VALUES:
+            return "automation"
+        if n.category in _UI_VALUES:
+            return "ui"
+        if n.category in _SECURITY_VALUES:
+            return "security"
+        if n.category in _REPORTING_VALUES:
+            return "reporting"
+        return "other"
+    if n.kind == "external":
+        low = n.category.lower()
+        if low in _UI_API_TYPES:
+            return "ui"
+        if low in _REPORTING_API_TYPES:
+            return "reporting"
+        if low in _SECURITY_API_TYPES:
+            return "security"
+    return "other"
+
+
+# ---- where used ----------------------------------------------------------------
 
 
 @dataclass
@@ -34,14 +104,25 @@ class Reference:
     confidence: float
     corroborated_by_api: bool
     notes: str | None
+    active: bool = True
+    is_test: bool = False
+
+    @property
+    def counts_as_usage(self) -> bool:
+        """Active, non-test reference of any kind."""
+        return self.active and not self.is_test
 
 
 @dataclass
 class WhereUsed:
     target: GraphNode
-    total: int
+    total: int  # every reference, including tests and inactive automation
     by_category: dict[str, list[Reference]]
     api_only_count: int
+    active_total: int = 0  # excludes test classes and inactive automation
+    automation_total: int = 0  # active automation / code only: what a delete would break
+    test_only: bool = False
+    inactive_only: bool = False
 
     def to_jsonable(self) -> dict[str, Any]:
         return {
@@ -51,6 +132,10 @@ class WhereUsed:
                 "api_name": self.target.api_name,
             },
             "total": self.total,
+            "active_total": self.active_total,
+            "automation_total": self.automation_total,
+            "test_only": self.test_only,
+            "inactive_only": self.inactive_only,
             "api_only_count": self.api_only_count,
             "by_category": {
                 cat: [
@@ -62,12 +147,27 @@ class WhereUsed:
                         "confidence": r.confidence,
                         "corroborated_by_api": r.corroborated_by_api,
                         "notes": r.notes,
+                        "active": r.active,
+                        "is_test": r.is_test,
                     }
                     for r in refs
                 ]
                 for cat, refs in self.by_category.items()
             },
         }
+
+
+def _ref(src: GraphNode, e: Any, notes: str | None) -> Reference:
+    return Reference(
+        src,
+        e.kind.value,
+        e.evidence.value,
+        e.confidence,
+        e.corroborated_by_api,
+        notes,
+        active=_is_active(src),
+        is_test=_is_test(src),
+    )
 
 
 def where_used(graph: DependencyGraph, node_id: str) -> WhereUsed:
@@ -79,7 +179,7 @@ def where_used(graph: DependencyGraph, node_id: str) -> WhereUsed:
     seen: set[str] = set()
     for e in graph.inbound(node_id):
         src = graph.node(str(e.source_id))
-        if src is None:
+        if src is None or _defines(e):
             continue
         key = f"{src.id}:{e.kind.value}"
         if key in seen:
@@ -87,42 +187,38 @@ def where_used(graph: DependencyGraph, node_id: str) -> WhereUsed:
         seen.add(key)
         if e.evidence is EvidenceChannel.DEPENDENCY_API:
             api_only += 1
-        by_cat[src.category].append(
-            Reference(
-                src, e.kind.value, e.evidence.value, e.confidence, e.corroborated_by_api, e.notes
-            )
-        )
+        by_cat[src.category].append(_ref(src, e, e.notes))
     # Object-level query: include references to any of the object's fields.
     if target.kind == "object":
         for n in graph.nodes.values():
-            if n.kind == "field" and n.object_name == target.api_name:
-                for e in graph.inbound(n.id):
-                    src = graph.node(str(e.source_id))
-                    if src is None or src.kind != "component":
-                        continue
-                    key = f"{src.id}:{e.kind.value}:{n.id}"
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    by_cat[src.category].append(
-                        Reference(
-                            src,
-                            e.kind.value,
-                            e.evidence.value,
-                            e.confidence,
-                            e.corroborated_by_api,
-                            f"via {n.api_name}",
-                        )
-                    )
+            if n.kind != "field" or n.object_name != target.api_name:
+                continue
+            for e in graph.inbound(n.id):
+                src = graph.node(str(e.source_id))
+                if src is None or src.kind != "component" or _defines(e):
+                    continue
+                key = f"{src.id}:{e.kind.value}:{n.id}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                by_cat[src.category].append(_ref(src, e, f"via {n.api_name}"))
     for refs in by_cat.values():
         refs.sort(key=lambda r: (-r.confidence, r.node.api_name.lower()))
-    total = sum(len(v) for v in by_cat.values())
+    all_refs = [r for refs in by_cat.values() for r in refs]
+    active = [r for r in all_refs if r.counts_as_usage]
     return WhereUsed(
         target=target,
-        total=total,
+        total=len(all_refs),
         by_category=dict(sorted(by_cat.items())),
         api_only_count=api_only,
+        active_total=len(active),
+        automation_total=sum(1 for r in active if _bucket(r.node) == "automation"),
+        test_only=bool(all_refs) and all(r.is_test for r in all_refs),
+        inactive_only=bool(all_refs) and all(not r.active for r in all_refs),
     )
+
+
+# ---- change impact -------------------------------------------------------------
 
 
 @dataclass
@@ -139,8 +235,8 @@ def impact_closure(
     """Breadth-first over *inbound* edges: everything that depends on ``node_id``.
 
     Field → automation → objects it writes → automation on those objects, and
-    so on. ``min_confidence`` drops edges we are not sure about so the closure
-    reflects what we can defend.
+    so on. Test classes are skipped; ``min_confidence`` drops edges we are not
+    sure about so the closure reflects what we can defend.
     """
     start = graph.node(node_id)
     if start is None:
@@ -159,7 +255,7 @@ def impact_closure(
             if nid in seen:
                 continue
             n = graph.node(nid)
-            if n is None:
+            if n is None or _is_test(n):
                 continue
             seen.add(nid)
             c = min(conf, e.confidence)
@@ -172,24 +268,15 @@ def impact_closure(
                         wn = graph.node(str(w.target_id))
                         if wn is not None:
                             seen.add(wn.id)
-                            out.append(
-                                ImpactedNode(
-                                    wn,
-                                    dist + 2,
-                                    [*path, n.api_name, wn.api_name],
-                                    min(c, w.confidence),
-                                )
-                            )
-                            q.append(
-                                (
-                                    wn.id,
-                                    dist + 2,
-                                    [*path, n.api_name, wn.api_name],
-                                    min(c, w.confidence),
-                                )
-                            )
+                            wpath = [*path, n.api_name, wn.api_name]
+                            wconf = min(c, w.confidence)
+                            out.append(ImpactedNode(wn, dist + 2, wpath, wconf))
+                            q.append((wn.id, dist + 2, wpath, wconf))
     out.sort(key=lambda i: (i.distance, -i.min_confidence, i.node.api_name.lower()))
     return out
+
+
+# ---- save impact ---------------------------------------------------------------
 
 
 @dataclass
@@ -197,9 +284,12 @@ class SaveImpactRow:
     step: int
     step_name: str
     component: GraphNode
-    relation: str  # fires | reads | writes | validates
+    relation: str  # fires | reads | writes | validates | inactive
     evidence: str
     confidence: float
+
+
+_RELATION_ORDER = {"fires": 0, "validates": 1, "writes": 2, "reads": 3, "inactive": 4}
 
 
 def save_impact(graph: DependencyGraph, object_name: str) -> list[SaveImpactRow]:
@@ -216,7 +306,7 @@ def save_impact(graph: DependencyGraph, object_name: str) -> list[SaveImpactRow]
 
     def consider(e: Any, relation: str) -> None:
         src = graph.node(str(e.source_id))
-        if src is None or src.kind != "component":
+        if src is None or src.kind != "component" or _is_test(src):
             return
         try:
             cat = CategoryName(src.category)
@@ -226,36 +316,30 @@ def save_impact(graph: DependencyGraph, object_name: str) -> list[SaveImpactRow]
         if not steps:
             return
         step = min(steps)
-        # Before-save vs after-save for triggers/flows
         if cat is CategoryName.APEX_TRIGGER and e.notes:
             if "before" in e.notes and "after" not in e.notes:
                 step = OoEStep.BEFORE_TRIGGERS
             elif "after" in e.notes and "before" not in e.notes:
                 step = OoEStep.AFTER_TRIGGERS
-        if cat in {CategoryName.RECORD_TRIGGERED_FLOW} and e.notes:
+        if cat is CategoryName.RECORD_TRIGGERED_FLOW and e.notes:
             step = (
                 OoEStep.PRE_TRIGGER_FLOW if "BeforeSave" in e.notes else OoEStep.PROCESSES_AND_FLOWS
             )
-        key = src.id
-        existing = rows.get(key)
-        rel = relation
-        if existing is not None and existing.relation == "inactive":
+        rel = "inactive" if not _is_active(src) else relation
+        existing = rows.get(src.id)
+        if existing is None:
+            rows[src.id] = SaveImpactRow(
+                int(step), OoEStep(int(step)).name, src, rel, e.evidence.value, e.confidence
+            )
             return
-        if existing is not None:
-            if existing.relation == "fires" or rel == existing.relation:
-                return
-            if rel == "fires":
-                existing.relation = "fires"
-                existing.step = int(step)
-                existing.step_name = OoEStep(int(step)).name
-            elif rel == "writes" and existing.relation == "reads":
-                existing.relation = "writes"
+        if existing.relation == "inactive" or rel == existing.relation:
             return
-        if src.meta.get("active") is False:
-            rel = "inactive"
-        rows[key] = SaveImpactRow(
-            int(step), OoEStep(int(step)).name, src, rel, e.evidence.value, e.confidence
-        )
+        if rel == "fires":
+            existing.relation = "fires"
+            existing.step = int(step)
+            existing.step_name = OoEStep(int(step)).name
+        elif rel == "writes" and existing.relation == "reads":
+            existing.relation = "writes"
 
     for e in graph.inbound(obj.id):
         consider(e, "fires" if e.kind.value == "triggers" else "reads")
@@ -263,43 +347,77 @@ def save_impact(graph: DependencyGraph, object_name: str) -> list[SaveImpactRow]
         for e in graph.inbound(fid):
             consider(e, "writes" if e.notes and "write" in e.notes else "reads")
     out = list(rows.values())
-    order = {"fires": 0, "validates": 1, "writes": 2, "reads": 3, "inactive": 4}
-    out.sort(key=lambda r: (r.step, order.get(r.relation, 5), r.component.api_name.lower()))
+    out.sort(
+        key=lambda r: (r.step, _RELATION_ORDER.get(r.relation, 5), r.component.api_name.lower())
+    )
     return out
+
+
+# ---- cleanup candidates --------------------------------------------------------
 
 
 @dataclass
 class UnusedField:
     node: GraphNode
-    reason: str  # no_references | ui_only | reporting_only
-    api_references: list[str] = field(default_factory=list)
+    reason: str  # one of UNUSED_REASON_ORDER
+    referenced_by: list[str] = field(default_factory=list)
+    fill_rate: float | None = None
+    record_count: int | None = None
+
+    @property
+    def empty(self) -> bool:
+        return self.fill_rate is not None and self.fill_rate == 0.0
 
 
 def unused_fields(graph: DependencyGraph) -> list[UnusedField]:
-    """Custom fields no automation, code, or UI references.
+    """Custom fields no *active, non-test* automation or code references.
 
-    A field referenced only by layouts/reports (visible only through the
-    Dependency API) is reported separately so the customer can decide.
+    Everything that still points at the field is listed so the customer can
+    decide: only test classes, only inactive automation, only permission sets
+    / profiles (FLS), only layouts / Lightning pages, only reports. Data
+    evidence (fill rate, record count) rides along when a profile exists.
     """
     out: list[UnusedField] = []
+    objects = {n.api_name: n for n in graph.nodes.values() if n.kind == "object"}
     for n in graph.nodes.values():
         if n.kind != "field" or not n.meta.get("custom"):
             continue
-        inbound = graph.inbound(n.id)
-        sources = [graph.node(str(e.source_id)) for e in inbound]
-        automation = [s for s in sources if s is not None and s.kind == "component"]
-        if automation:
+        sources = [
+            s
+            for e in graph.inbound(n.id)
+            if not _defines(e) and (s := graph.node(str(e.source_id))) is not None
+        ]
+        live = [
+            s for s in sources if _bucket(s) == "automation" and _is_active(s) and not _is_test(s)
+        ]
+        if live:
             continue
-        ext = [s for s in sources if s is not None and s.kind == "external"]
-        ui = [s.api_name for s in ext if s.category.lower() in _UI_API_TYPES]
-        rep = [s.api_name for s in ext if s.category.lower() in _REPORTING_API_TYPES]
-        if ui:
-            out.append(UnusedField(n, "ui_only", ui + rep))
-        elif rep:
-            out.append(UnusedField(n, "reporting_only", rep))
+        buckets = {_bucket(s) for s in sources}
+        if not sources:
+            reason = "no_references"
+        elif buckets == {"automation"} and all(_is_test(s) for s in sources):
+            reason = "test_only"
+        elif buckets == {"automation"}:
+            reason = "inactive_only"
+        elif "ui" in buckets:
+            reason = "ui_only"
+        elif "security" in buckets and "reporting" not in buckets:
+            reason = "security_only"
+        elif "reporting" in buckets:
+            reason = "reporting_only"
         else:
-            out.append(UnusedField(n, "no_references"))
-    out.sort(key=lambda u: (u.reason, u.node.api_name.lower()))
+            reason = "inactive_only"
+        obj = objects.get(n.object_name or "")
+        out.append(
+            UnusedField(
+                n,
+                reason,
+                sorted({s.api_name for s in sources}),
+                fill_rate=n.meta.get("fill_rate"),
+                record_count=obj.meta.get("record_count") if obj else None,
+            )
+        )
+    out.sort(key=lambda u: (UNUSED_REASON_ORDER.index(u.reason), u.node.api_name.lower()))
     return out
 
 
@@ -324,12 +442,8 @@ def legacy_automation(
         if n is None:
             continue
         raw = c.raw if isinstance(c.raw, dict) else {}
-        fields = [
-            graph.node(str(e.target_id))
-            for e in graph.outbound(n.id)
-            if e.kind.value in {"references", "owns"}
-        ]
-        field_names = sorted({f.api_name for f in fields if f is not None and f.kind == "field"})
+        targets = [graph.node(str(e.target_id)) for e in graph.outbound(n.id)]
+        field_names = sorted({t.api_name for t in targets if t is not None and t.kind == "field"})
         downstream: set[str] = set()
         for e in graph.outbound(n.id):
             if e.notes and "write" in e.notes:
@@ -351,6 +465,9 @@ def summarize(
     """Headline numbers for the report."""
     unused = unused_fields(graph)
     legacy = legacy_automation(graph, components)
+    comps = [n for n in graph.nodes.values() if n.kind == "component"]
+    fields = [n for n in graph.nodes.values() if n.kind == "field"]
+    surface_reasons = {"ui_only", "security_only", "reporting_only"}
     return {
         "nodes": len(graph.nodes),
         "edges": len(graph.edges),
@@ -360,11 +477,15 @@ def summarize(
         "api_rows_seen": graph.api_rows_seen,
         "api_matched": graph.api_matched,
         "api_only": graph.api_only,
-        "custom_fields": sum(
-            1 for n in graph.nodes.values() if n.kind == "field" and n.meta.get("custom")
-        ),
+        "custom_fields": sum(1 for n in fields if n.meta.get("custom")),
         "unused_custom_fields": sum(1 for u in unused if u.reason == "no_references"),
-        "ui_only_custom_fields": sum(1 for u in unused if u.reason != "no_references"),
+        "test_only_custom_fields": sum(1 for u in unused if u.reason == "test_only"),
+        "inactive_only_custom_fields": sum(1 for u in unused if u.reason == "inactive_only"),
+        "surface_only_custom_fields": sum(1 for u in unused if u.reason in surface_reasons),
+        "empty_custom_fields": sum(1 for u in unused if u.empty),
+        "profiled_fields": sum(1 for n in fields if "fill_rate" in n.meta),
+        "dynamic_apex_classes": sum(1 for n in comps if n.meta.get("dynamic_access")),
+        "test_classes": sum(1 for n in comps if n.meta.get("is_test")),
         "legacy_automation": len(legacy),
         "legacy_active": sum(1 for la in legacy if la.active),
         "schema_objects": len(schema.objects()) if schema else 0,

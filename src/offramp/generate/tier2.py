@@ -9,10 +9,10 @@ separate operational step (Phase 5).
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from offramp.core.models import CategoryName, Component
+from offramp.generate._ids import safe_id
 
 
 @dataclass(frozen=True)
@@ -23,13 +23,6 @@ class GeneratedWorkflow:
     workflow_name: str  # Python class name
     activity_names: tuple[str, ...]
     code: str
-
-
-def _safe_id(s: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", s)
-    if not cleaned or cleaned[0].isdigit():
-        cleaned = f"w_{cleaned}"
-    return cleaned
 
 
 _HEADER = '''\
@@ -66,7 +59,7 @@ def translate(component: Component) -> GeneratedWorkflow:
 
 
 def _translate_approval(component: Component) -> GeneratedWorkflow:
-    name = _safe_id(component.api_name or component.name)
+    name = safe_id(component.api_name or component.name, prefix="w_")
     cls = f"Approval_{name}"
     code = (
         _HEADER
@@ -130,7 +123,7 @@ class {cls}:
 
 
 def _translate_scheduled(component: Component) -> GeneratedWorkflow:
-    name = _safe_id(component.api_name or component.name)
+    name = safe_id(component.api_name or component.name, prefix="w_")
     cls = f"Scheduled_{name}"
     code = (
         _HEADER
@@ -168,7 +161,7 @@ class {cls}:
 
 
 def _translate_generic_workflow(component: Component) -> GeneratedWorkflow:
-    name = _safe_id(component.api_name or component.name)
+    name = safe_id(component.api_name or component.name, prefix="w_")
     cls = f"Wf_{name}"
     code = (
         _HEADER

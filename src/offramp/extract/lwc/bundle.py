@@ -1,7 +1,6 @@
-"""LWC bundle extractor (Phase 1 — regex-based classifier).
+"""LWC bundle extractor (regex-based classifier).
 
-Real impl uses tree-sitter-javascript for AST-level analysis; that lands as a
-Phase 2 follow-up. The Phase 1 regex pass is sufficient for:
+A tree-sitter pass is a possible upgrade; the regex pass is sufficient for:
 
 * identifying ``@salesforce/apex/`` imports (high-confidence Apex links)
 * counting business-logic density signals (LOC, conditionals, fetch calls)

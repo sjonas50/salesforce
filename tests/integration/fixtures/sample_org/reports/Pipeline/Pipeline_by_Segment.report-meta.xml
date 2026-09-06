@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Report xmlns="http://soap.sforce.com/2006/04/metadata">
+    <name>Pipeline by Segment</name>
+    <reportType>Lead</reportType>
+    <format>Summary</format>
+    <columns><field>LEAD.NAME</field></columns>
+    <columns><field>Lead.Score__c</field></columns>
+    <columns><field>LEAD.STATUS</field></columns>
+    <groupingsDown><field>Lead.Legacy_Segment__c</field><sortOrder>Asc</sortOrder></groupingsDown>
+    <filter>
+        <criteriaItems><column>LEAD.CREATED_DATE</column><operator>greaterThan</operator><value>LAST_YEAR</value></criteriaItems>
+    </filter>
+</Report>

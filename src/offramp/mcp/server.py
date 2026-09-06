@@ -9,9 +9,10 @@ write, and CDC subscription routes through it so we can centralize:
 * Tool-level permission scoping
 * Pluggable backend: real ``simple-salesforce`` for prod, in-memory for tests
 
-Phase 0 ships the gateway skeleton + the in-memory backend used by the smoke
-test. The real Salesforce backend lands in Phase 1 alongside the extract
-engine; the API quota allocator (AD-24) lands in Phase 3 (task 3.13).
+Two backends satisfy :class:`SalesforceBackend`: the in-memory one used by
+tests, and :class:`offramp.mcp.sf_backend.SimpleSalesforceBackend` (JWT bearer
++ simple-salesforce) for real orgs. The AD-24 quota allocator lives in
+:mod:`offramp.mcp.quota`.
 """
 
 from __future__ import annotations
@@ -42,6 +43,8 @@ class SalesforceBackend(Protocol):
     async def describe_global(self) -> dict[str, Any]: ...
     async def tooling_query(self, soql: str) -> dict[str, Any]: ...
     async def restful(self, path: str, params: dict[str, Any] | None = None) -> Any: ...
+    async def mdapi_retrieve(self, unpackaged: dict[str, list[str]]) -> bytes: ...
+    async def mdapi_list(self, metadata_type: str, folder: str | None = None) -> list[str]: ...
 
 
 @dataclass
@@ -58,6 +61,9 @@ class InMemorySalesforceBackend:
     tooling: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     describes: dict[str, dict[str, Any]] = field(default_factory=dict)
     rest: dict[str, Any] = field(default_factory=dict)
+    # Metadata API stand-in: a ZIP the retrieve returns, and folder listings.
+    mdapi_zip: bytes = b""
+    mdapi_folders: dict[str, list[str]] = field(default_factory=dict)
 
     async def query(self, soql: str) -> dict[str, Any]:
         log.debug("mcp.in_memory.query", soql=soql)
@@ -138,7 +144,19 @@ class InMemorySalesforceBackend:
             return self.rest[path]
         if path.startswith("query") and params and "q" in params:
             return await self.query(str(params["q"]))
+        if path == "limits/recordCount" and params:
+            names = str(params.get("sObjects", "")).split(",")
+            return {
+                "sObjects": [{"name": n, "count": len(self.records.get(n, {}))} for n in names if n]
+            }
         return {}
+
+    async def mdapi_retrieve(self, unpackaged: dict[str, list[str]]) -> bytes:
+        log.debug("mcp.in_memory.mdapi_retrieve", types=sorted(unpackaged))
+        return self.mdapi_zip
+
+    async def mdapi_list(self, metadata_type: str, folder: str | None = None) -> list[str]:
+        return list(self.mdapi_folders.get(f"{metadata_type}:{folder or ''}", []))
 
 
 def _dig(row: dict[str, Any], dotted: str) -> Any:
@@ -216,4 +234,19 @@ class MCPGateway:
     async def sf_restful(self, path: str, params: dict[str, Any] | None = None) -> Any:
         result = await self.backend.restful(path, params)
         await self.engram.anchor(self.component, {"tool": "sf_restful", "path": path})
+        return result
+
+    async def sf_mdapi_retrieve(self, unpackaged: dict[str, list[str]]) -> bytes:
+        result = await self.backend.mdapi_retrieve(unpackaged)
+        await self.engram.anchor(
+            self.component,
+            {"tool": "sf_mdapi_retrieve", "types": sorted(unpackaged), "bytes": len(result)},
+        )
+        return result
+
+    async def sf_mdapi_list(self, metadata_type: str, folder: str | None = None) -> list[str]:
+        result = await self.backend.mdapi_list(metadata_type, folder)
+        await self.engram.anchor(
+            self.component, {"tool": "sf_mdapi_list", "type": metadata_type, "folder": folder}
+        )
         return result

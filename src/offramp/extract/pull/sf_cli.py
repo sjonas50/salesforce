@@ -96,6 +96,7 @@ class SfCliPullClient:
         self.source_version = self._cli_version()
         self.retrieved_groups: list[list[str]] = []
         self.failed_groups: list[tuple[list[str], str]] = []
+        self.failures: list[str] = []
 
     def _cli_version(self) -> str:
         try:
@@ -115,6 +116,7 @@ class SfCliPullClient:
             self._retrieve(group)
         tree = SourceTree(self.output_dir)
         wanted = set(categories) if categories else None
+        self.failures = [f"{'+'.join(t)}: {msg}" for t, msg in self.failed_groups]
         recs = tree.records(
             source=self.source_name,
             source_version=self.source_version,
@@ -147,7 +149,12 @@ class SfCliPullClient:
             self.api_version,
             "--json",
         ]
-        res = self.runner(argv)
+        try:
+            res = self.runner(argv)
+        except OSError as exc:  # sf binary missing / not executable
+            self.failed_groups.append((types, f"{self.sf_binary}: {exc}"))
+            log.error("extract.sf_cli.binary_unavailable", binary=self.sf_binary, error=str(exc))
+            return
         ok = res.returncode == 0
         message = ""
         if res.stdout.strip().startswith("{"):

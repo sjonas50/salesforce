@@ -153,6 +153,9 @@ def test_routing_decision_pattern_enforced() -> None:
         )
 
 
-def test_category_enum_has_21_entries() -> None:
-    """v2.1 reference defines 21 automation categories."""
-    assert len(set(CategoryName)) == 21
+def test_category_enum_has_21_automation_entries_plus_surfaces() -> None:
+    from offramp.core.models import AUTOMATION_CATEGORIES
+
+    assert len(AUTOMATION_CATEGORIES) == 21
+    assert len(CategoryName) == 26
+    assert CategoryName.PAGE_LAYOUT not in AUTOMATION_CATEGORIES

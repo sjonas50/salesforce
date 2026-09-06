@@ -78,12 +78,11 @@ def get_body(record: ReconciledRecord, root_tag: str) -> dict[str, Any]:
     except ET.ParseError as exc:
         raise ValueError(f"{root_tag} {record.api_name}: XML parse error: {exc}") from exc
     body = doc.get(root_tag)
-    if not isinstance(body, dict):
-        # Empty root element (e.g. a bare <ApexClass/>) parses to "".
-        if body == "" or (body is None and len(doc) == 1):
-            return {}
-        raise ValueError(f"{root_tag} {record.api_name}: XML root malformed (got {list(doc)})")
-    return body
+    if isinstance(body, dict):
+        return body
+    if body == "":
+        return {}  # empty root element, e.g. a bare <ApexClass/>
+    raise ValueError(f"{root_tag} {record.api_name}: XML root malformed (got {list(doc)})")
 
 
 def as_list(v: Any) -> list[Any]:

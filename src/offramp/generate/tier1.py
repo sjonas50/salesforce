@@ -18,12 +18,12 @@ that the orchestrator records as a "skipped" finding.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from offramp.core.models import CategoryName, Component
 from offramp.extract.ooe_audit.audit import OoEStep
+from offramp.generate._ids import safe_id
 from offramp.generate.formula.emitter import emit_rule_body
 from offramp.generate.formula.parser import UnsupportedFormulaError
 
@@ -43,19 +43,11 @@ class GeneratedRule:
     fixes_field: str | None = None
 
 
-def _safe_id(s: str) -> str:
-    """Sanitize an arbitrary SF developer name into a Python identifier."""
-    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", s)
-    if not cleaned or cleaned[0].isdigit():
-        cleaned = f"r_{cleaned}"
-    return cleaned
-
-
 # Shared preamble: generated modules that may use formula helpers import them
 # eagerly. Emit-once; cheap. Makes every generated module self-contained.
 _FORMULA_RUNTIME_IMPORT = (
     "from offramp.runtime.rules.formula_runtime import (\n"
-    "    _addmonths, _begins, _blankvalue, _ceil, _contains, _date,\n"
+    "    _addmonths, _begins, _blankvalue, _ceil, _concat, _contains, _date,\n"
     "    _field, _find, _floor, _ispickval, _isblank, _left, _lower,\n"
     "    _mid, _mod, _now, _right, _round, _substitute, _text, _today,\n"
     "    _trim, _upper, _value,\n"
@@ -94,7 +86,7 @@ def _translate_validation_rule(component: Component) -> GeneratedRule:
     if not formula:
         raise ValueError(f"validation rule {component.name} has no error_condition_formula")
     sobject = str(raw.get("object", "")) or "Unknown"
-    function_name = f"vr_{_safe_id(component.api_name or component.name)}"
+    function_name = f"vr_{safe_id(component.api_name or component.name)}"
     code = emit_rule_body(formula, function_name=function_name)
     return GeneratedRule(
         rule_id=f"{sobject}.{component.name}",
@@ -115,7 +107,7 @@ def _translate_formula_field(component: Component) -> GeneratedRule:
         raise ValueError(f"formula field {component.name} has no formula")
     sobject = str(raw.get("object", "")) or "Unknown"
     field_name = str(raw.get("field_name", component.name))
-    function_name = f"ff_{_safe_id(component.api_name or component.name)}"
+    function_name = f"ff_{safe_id(component.api_name or component.name)}"
     code = emit_rule_body(formula, function_name=function_name)
     return GeneratedRule(
         rule_id=f"{sobject}.{field_name}",
@@ -143,7 +135,7 @@ def _translate_workflow_rule(component: Component) -> GeneratedRule:
     rules = [r for r in raw.get("rules", []) if r.get("active")]
     # field_updates is a name-keyed map shared across all rules.
     fu_by_name = {fu["name"]: fu for fu in raw.get("field_updates", [])}
-    function_name = f"wf_{_safe_id(component.api_name or component.name)}"
+    function_name = f"wf_{safe_id(component.api_name or component.name)}"
 
     # Build the Python body: for each active rule, evaluate criteria;
     # if matched, apply the rule's immediate field-update actions.
@@ -161,7 +153,7 @@ def _translate_workflow_rule(component: Component) -> GeneratedRule:
         lines.append("    return None")
     else:
         for rule in rules:
-            rule_name = _safe_id(rule.get("name", ""))
+            rule_name = safe_id(rule.get("name", ""))
             criteria_items = rule.get("criteria_items", [])
             formula = rule.get("formula")
             # Build the guard expression.
@@ -233,7 +225,7 @@ def _translate_assignment_rule(component: Component) -> GeneratedRule:
         for e in g.get("entries", []):
             active_entries.append(e)
 
-    function_name = f"ar_{_safe_id(component.api_name or component.name)}"
+    function_name = f"ar_{safe_id(component.api_name or component.name)}"
     lines = [
         '"""Auto-generated assignment rule batch."""',
         "from __future__ import annotations",
@@ -310,7 +302,7 @@ def _translate_simple_flow(component: Component) -> GeneratedRule:
     record_creates = raw.get("record_creates", [])
     decisions = raw.get("decisions", [])
 
-    function_name = f"fl_{_safe_id(component.api_name or component.name)}"
+    function_name = f"fl_{safe_id(component.api_name or component.name)}"
     lines = [
         '"""Auto-generated simple flow rule."""',
         "from __future__ import annotations",
@@ -434,6 +426,15 @@ def _flow_assignment_py(assign: dict[str, Any]) -> str:
     value = assign.get("value")
     if value is None:
         return f"    mutations[{target_field!r}] = None"
+    if isinstance(value, dict):
+        ref = str(value.get("ref", ""))
+        if ref.startswith("$Record.") and "." not in ref[len("$Record.") :]:
+            # {!$Record.Field}: copy another field of the same record.
+            return f"    mutations[{target_field!r}] = _field(record, {ref[len('$Record.') :]!r})"
+        raise UnsupportedFormulaError(
+            f"flow assignment to {target_field} references element {ref!r}; "
+            "Tier 1 cannot evaluate flow variables or formulas"
+        )
     if isinstance(value, (int, float, bool)):
         return f"    mutations[{target_field!r}] = {value!r}"
     return f"    mutations[{target_field!r}] = {str(value)!r}"

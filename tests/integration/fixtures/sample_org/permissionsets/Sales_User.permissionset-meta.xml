@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>Sales User</label>
+    <classAccesses><apexClass>LeadScoringService</apexClass><enabled>true</enabled></classAccesses>
+    <classAccesses><apexClass>UnusedLegacyUtil</apexClass><enabled>false</enabled></classAccesses>
+    <fieldPermissions><editable>true</editable><field>Lead.Country__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Lead.Score__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Lead.Archived_Reason__c</field><readable>true</readable></fieldPermissions>
+    <flowAccesses><enabled>true</enabled><flow>CaptureLeadDetails</flow></flowAccesses>
+    <objectPermissions><allowCreate>true</allowCreate><allowRead>true</allowRead><allowEdit>true</allowEdit><allowDelete>false</allowDelete><object>Lead</object></objectPermissions>
+</PermissionSet>

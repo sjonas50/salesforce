@@ -62,6 +62,9 @@ Complexity legend: **S** ≤ 1 day, **M** 2–5 days, **L** ≥ 1 week. Sequence
 | A.7 | CLI `--org` wired for `extract` and `xray`; `--source-dir` for SFDX projects; `--via sf-cli`. | `cli/extract.py`, `cli/xray.py` | S |
 | A.8 | Richer fixture org: realistic Apex classes with SOQL/DML/callouts, a trigger with a handler, Flows with decisions/assignments/loops/lookups/action calls, an approval process with steps. | `tests/integration/fixtures/sample_org/` | M |
 
+| A.9 | Metadata API retrieve through simple-salesforce (`mdapi`), no CLI on either side; default REST path retrieves only the types Tooling cannot read in full (approval, assignment/escalation/auto-response/sharing rules, reports). `CompositePullClient` + reconciler body precedence. | `extract/pull/mdapi.py`, `pull/reconciler.py` | M |
+| A.10 | Tooling client hardening from review: `Metadata` fetched per record, CronTrigger / AsyncApexJob / ProcessDefinition via REST, custom-object Ids mapped to names, CDC channel query fixed. | `extract/pull/tooling_api.py` | M |
+
 **Gate A:** `make test` green; `offramp extract --fixture … --out out/fx` produces components for 21 categories with Apex bodies present and `schema.json` written; `offramp extract --org <alias>` against a scratch org produces ≥ 1 component per exercised category with zero `NotImplementedError` paths remaining in `extract/pull`.
 
 ### Phase B — Understanding the code and the declarative surface (months 2–4)
@@ -75,6 +78,8 @@ Complexity legend: **S** ≤ 1 day, **M** 2–5 days, **L** ≥ 1 week. Sequence
 | B.5 | Formula reference extraction (fields, relationship paths, `$` globals) using the formula parser with a tolerant fallback. Parser breadth: `ISNEW`, `ISCHANGED`, `PRIORVALUE`, `INCLUDES`, `REGEX`, date parts, `$User`/`$Profile`/`$Setup`/`$Label`. | `generate/formula/parser.py`, `generate/formula/references.py` | M |
 | B.6 | Normalize the passthrough categories: Approval Process (entry criteria, steps, approvers, actions), Sharing Rules (criteria), Escalation, Auto-Response, Roll-Up Summary, Platform Event, CDC. Each emits `references`. | `extract/categories/*.py` | L |
 | B.7 | LWC: keep the regex classifier; add `lightning/ui*Api` object/field references and `@salesforce/schema` imports. | `extract/lwc/bundle.py` | S |
+| B.8 | Surface categories: page layouts, Lightning pages, permission sets, profiles, reports (`CategoryName` 22–26, never on the save path). UI / security / reporting references feed where-used and the unused-field verdict. | `extract/categories/surfaces.py` | M |
+| B.9 | Dynamic-access flag per Apex class (`Database.query` with built strings, `Type.forName(var)`, `sObject.get(var)`, `getGlobalDescribe`); lowers parser-edge confidence and shows in the report. Literal `so.get('Field__c')` resolves. | `extract/apex/references.py` | S |
 
 **Gate B:** every fixture Apex class yields ≥ 1 reference; `LeadDispatcher` resolves to its handlers; every fixture Flow yields object + field references; no category is `passthrough=True`; formula parser handles the fixture corpus plus a 40-case reference test.
 
@@ -100,6 +105,8 @@ Complexity legend: **S** ≤ 1 day, **M** 2–5 days, **L** ≥ 1 week. Sequence
 | D.3 | Unused-metadata detection: fields with no automation, UI, or code references; inactive automation; legacy WFR/PB with migration blast radius. | `understand/impact.py` | M |
 | D.4 | X-Ray HTML: dependency table with evidence, "Where is this used" explorer, save-impact view, unused list, schema summary. JSON export versioned `2.0`. | `templates/xray.html.j2`, `understand/xray/render.py` | L |
 | D.5 | CLI: `offramp impact --node <Object.Field>`; `offramp xray` runs without FalkorDB when `--no-graph-db` (networkx only). | `cli/impact.py`, `cli/xray.py` | M |
+| D.8 | Data profile: `limits/recordCount` + one aggregate `COUNT(field)` query per object (chunked) → record counts and fill rates on graph nodes; `--no-data-profile` to skip. Unused fields carry fill rate and "never populated". | `extract/data_profile.py` | M |
+| D.9 | Usage semantics: only active, non-test automation counts as usage; where-used reports `automation_total` / `active_total` / test-only / inactive-only; unused-field reasons `no_references`, `test_only`, `inactive_only`, `security_only`, `ui_only`, `reporting_only`. | `understand/impact.py` | S |
 | D.6 | Continuous sync: scheduled re-extract, content-hash diff, change log per component. | `extract/changes.py` | L |
 | D.7 | Hosted service: FastAPI app exposing connect (OAuth), scan, report, impact; multi-tenant by org (AD-10 single-tenant data plane per customer). | `service/` | L |
 
@@ -108,6 +115,13 @@ Complexity legend: **S** ≤ 1 day, **M** 2–5 days, **L** ≥ 1 week. Sequence
 ### Phase E — Execution-order impact and safe cleanup (months 6–12)
 
 E.1 finish OoE runtime steps that real orgs exercise (`runtime/ooe`); E.2 surface "what fires, in what order" in the impact view; E.3 cleanup execution with deploy-backed rollback (Tooling API deactivate, Metadata API deploy); E.4 AppExchange connector listing after revenue.
+
+## Known limitations (tracked, not yet scheduled)
+
+- Apex analysis is tokenizer-based: class properties are not typed, `is_sobject_name` uses a fixed standard-object list plus suffix rules, and inner-class references (`Outer.Inner`) resolve only when the outer class is in the corpus. A grammar-backed parser (AD-31) is the fix.
+- `MetadataComponentDependency` rows with no parser evidence become `dependency_api` edges at 0.6 confidence so the report can show them; they are excluded from "live automation" counts but do appear in totals.
+- The Tooling path reads reports through the Analytics describe endpoint, capped at the 300 most recently run; the Metadata API path has no cap.
+- Aggregate `COUNT(field)` is not allowed on long text, rich text, encrypted, multi-select, and compound fields, so those fields have no fill rate.
 
 ## Deferred (year two)
 

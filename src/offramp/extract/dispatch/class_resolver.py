@@ -6,7 +6,7 @@ Confidence scores follow the architecture spec:
 * case-insensitive match → 0.9
 * common-prefix partial match → 0.6
 
-Anything below 0.6 is dropped — the orphan resolver (Phase 2) will pick it up
+Anything below 0.6 is dropped — the orphan resolver will pick it up
 via a different channel.
 """
 

@@ -58,8 +58,11 @@
   <div class="tiles">
     <div class="tile"><b>{{ summary.edges }}</b><span>dependency edges</span></div>
     <div class="tile"><b>{{ summary.edges_by_evidence | length }}</b><span>evidence channels</span></div>
-    <div class="tile"><b>{{ summary.unused_custom_fields }}</b><span>unused custom fields</span></div>
-    <div class="tile"><b>{{ summary.ui_only_custom_fields }}</b><span>layout / report only</span></div>
+    <div class="tile"><b>{{ summary.unused_custom_fields }}</b><span>unreferenced custom fields</span></div>
+    <div class="tile"><b>{{ summary.test_only_custom_fields + summary.inactive_only_custom_fields }}</b><span>test / inactive only</span></div>
+    <div class="tile"><b>{{ summary.surface_only_custom_fields }}</b><span>UI / FLS / report only</span></div>
+    {% if has_data_profile %}<div class="tile"><b>{{ summary.empty_custom_fields }}</b><span>never populated</span></div>{% endif %}
+    <div class="tile"><b>{{ summary.dynamic_apex_classes }}</b><span>classes with dynamic access</span></div>
     <div class="tile"><b>{{ summary.legacy_active }}</b><span>active legacy automations</span></div>
     <div class="tile"><b>{{ orphan_total - orphan_resolved }}</b><span>likely dead classes</span></div>
     <div class="tile"><b>{{ summary.api_matched }} / {{ summary.api_only }}</b><span>API corroborated / API-only</span></div>
@@ -95,14 +98,15 @@
 <div class="grid2">
 <div>
 <h2>Unused custom fields</h2>
-<p class="lede">No automation, code, or component references. Fields seen only by layouts or reports (through the Dependency API) are listed separately.</p>
+<p class="lede">No active, non-test automation or code references the field. What still points at it (test classes, inactive automation, permission sets, layouts, reports) is listed so you can decide.{% if has_data_profile %} Fill rate is the share of records with a value.{% endif %}</p>
 <div class="tablewrap"><table>
-  <tr><th>Field</th><th>Label</th><th>Status</th><th>Seen by</th></tr>
+  <tr><th>Field</th><th>Label</th><th>Status</th>{% if has_data_profile %}<th>Fill</th><th>Records</th>{% endif %}<th>Still referenced by</th></tr>
   {% for u in unused_fields %}
   <tr><td><b>{{ u.field }}</b></td><td>{{ u.label }}</td>
-      <td><span class="flag {% if u.reason == 'no_references' %}bad{% else %}warn{% endif %}">{{ u.reason | replace('_',' ') }}</span></td>
-      <td>{{ u.api_references | join(', ') }}</td></tr>
-  {% else %}<tr><td colspan="4">None found.</td></tr>{% endfor %}
+      <td><span class="flag {% if u.reason == 'no_references' %}bad{% elif u.reason in ('test_only', 'inactive_only') %}warn{% else %}dim{% endif %}">{{ u.reason | replace('_',' ') }}</span></td>
+      {% if has_data_profile %}<td class="num">{% if u.fill_rate is not none %}{{ "%.0f"|format(u.fill_rate * 100) }}%{% if u.empty %} <span class="flag bad">empty</span>{% endif %}{% endif %}</td><td class="num">{{ u.record_count if u.record_count is not none else '' }}</td>{% endif %}
+      <td>{{ u.referenced_by | join(', ') }}</td></tr>
+  {% else %}<tr><td colspan="{{ 6 if has_data_profile else 4 }}">None found.</td></tr>{% endfor %}
 </table></div>
 </div>
 <div>
@@ -136,7 +140,7 @@
 <div class="tablewrap"><table>
   <tr><th>Component</th><th>Category</th><th>Object</th><th>Active</th><th>In</th><th>Out</th><th>API ✓</th><th>Difficulty</th><th>Risk</th><th>Summary</th></tr>
   {% for row in component_rows %}
-  <tr><td><b>{{ row.name }}</b>{% if row.partial %} <span class="flag warn">partial</span>{% endif %}{% if row.legacy %} <span class="flag warn">legacy</span>{% endif %}</td>
+  <tr><td><b>{{ row.name }}</b>{% if row.partial %} <span class="flag warn">partial</span>{% endif %}{% if row.legacy %} <span class="flag warn">legacy</span>{% endif %}{% if row.is_test %} <span class="flag dim">test</span>{% endif %}{% if row.dynamic_access %} <span class="flag warn" title="{{ row.dynamic_access | join(', ') }}">dynamic</span>{% endif %}{% if row.surface %} <span class="flag dim">{{ row.surface }}</span>{% endif %}</td>
       <td>{{ row.category | replace('_',' ') }}</td><td>{{ row.object }}</td>
       <td>{% if row.active %}<span class="flag ok">yes</span>{% else %}<span class="flag bad">no</span>{% endif %}</td>
       <td class="num">{{ row.inbound }}</td><td class="num">{{ row.outbound }}</td><td class="num">{{ row.api_corroborated }}</td>
@@ -222,8 +226,8 @@
     const hits = (needle ? data.filter(d => d.name.toLowerCase().includes(needle)) : data.slice(0, 8)).slice(0, 25);
     out.innerHTML = hits.map(d => `
       <div class="hit">
-        <h4>${esc(d.name)} <small>${esc(d.kind)}${d.custom ? ' · custom' : ''} · ${d.total} reference${d.total === 1 ? '' : 's'}${d.api_only ? ' · ' + d.api_only + ' API-only' : ''}</small></h4>
-        ${d.refs.length ? '<ul class="refs">' + d.refs.map(r => `<li><b>${esc(r.name)}</b> <small>${esc(r.category.replace(/_/g,' '))}</small> <span class="ev">${esc(r.kind)} · ${esc(r.evidence)} · ${r.confidence.toFixed(2)}${r.api ? ' · api ✓' : ''}${r.notes ? ' · ' + esc(r.notes) : ''}</span></li>`).join('') + '</ul>' : '<div class="ev" style="color:var(--red)">No references found.</div>'}
+        <h4>${esc(d.name)} <small>${esc(d.kind)}${d.custom ? ' · custom' : ''} · ${d.automation_total} live automation · ${d.total} total${d.api_only ? ' · ' + d.api_only + ' API-only' : ''}${d.fill_rate != null ? ' · fill ' + Math.round(d.fill_rate * 100) + '%' : ''}</small></h4>
+        ${d.refs.length ? '<ul class="refs">' + d.refs.map(r => `<li><b>${esc(r.name)}</b> <small>${esc(r.category.replace(/_/g,' '))}${r.is_test ? ' · test' : ''}${r.active === false ? ' · inactive' : ''}</small> <span class="ev">${esc(r.kind)} · ${esc(r.evidence)} · ${r.confidence.toFixed(2)}${r.api ? ' · api ✓' : ''}${r.notes ? ' · ' + esc(r.notes) : ''}</span></li>`).join('') + '</ul>' : '<div class="ev" style="color:var(--red)">No references found.</div>'}
       </div>`).join('') || '<div class="hit">No match.</div>';
   }
   input.addEventListener('input', e => render(e.target.value));

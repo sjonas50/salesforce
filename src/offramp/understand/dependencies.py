@@ -25,8 +25,10 @@ from typing import Any
 
 from offramp.core.logging import get_logger
 from offramp.core.models import (
+    AUTOMATION_CATEGORIES,
     CategoryName,
     Component,
+    DataProfile,
     Dependency,
     DependencyKind,
     EvidenceChannel,
@@ -284,6 +286,24 @@ class _Index:
         self.email_alerts: dict[str, str] = {}  # 'Lead.Welcome_Lead_Alert' -> workflow component id
 
 
+_FIRES_ON_HOST = {
+    CategoryName.APEX_TRIGGER,
+    CategoryName.RECORD_TRIGGERED_FLOW,
+    CategoryName.PROCESS_BUILDER,
+    CategoryName.SCHEDULE_TRIGGERED_FLOW,
+    CategoryName.FLOW_ORCHESTRATION,
+    CategoryName.WORKFLOW_RULE,
+    CategoryName.VALIDATION_RULE,
+    CategoryName.ASSIGNMENT_RULE,
+    CategoryName.AUTO_RESPONSE_RULE,
+    CategoryName.ESCALATION_RULE,
+    CategoryName.SHARING_RULE,
+    CategoryName.APPROVAL_PROCESS,
+}
+_USER_CONTEXT_GLOBALS = {"$User", "$Profile", "$UserRole", "$Organization"}
+_SECURITY = {CategoryName.PERMISSION_SET, CategoryName.PROFILE}
+
+
 def build_graph(
     *,
     org_alias: str,
@@ -292,41 +312,73 @@ def build_graph(
     dispatch_edges: list[DispatchEdge] | None = None,
     api_rows: list[dict[str, Any]] | None = None,
     cron_rows: list[dict[str, Any]] | None = None,
+    data_profile: DataProfile | None = None,
 ) -> DependencyGraph:
-    g = DependencyGraph(org_alias=org_alias)
-    idx = _Index()
-
-    # ---- nodes ----
-    for c in components:
-        obj = _component_object(c)
-        n = g.add_node(
-            GraphNode(
-                id=str(c.id),
-                kind="component",
-                category=c.category.value,
-                name=c.name,
-                api_name=c.api_name or c.name,
-                object_name=obj,
-                meta={"content_hash": c.content_hash, "active": _component_active(c)},
-            )
-        )
-        key = (c.api_name or c.name).lower()
-        if c.category is CategoryName.APEX_CLASS:
-            idx.apex[key] = n.id
-        elif c.category in _FLOW_CATEGORIES:
-            idx.flows[key] = n.id
-        elif c.category is CategoryName.WORKFLOW_RULE and obj:
-            idx.workflow_by_object[obj.lower()] = n.id
-            for ea in c.raw.get("email_alerts", []) if isinstance(c.raw, dict) else []:
-                if ea.get("name"):
-                    idx.email_alerts[f"{obj}.{ea['name']}".lower()] = n.id
-        elif c.category is CategoryName.PLATFORM_EVENT:
-            idx.platform_events[key] = n.id
-        idx.components[(c.category.value, key)] = n.id
-
+    """Build the org graph: nodes first, then one edge pass per source of evidence."""
+    b = _Builder(org_alias)
+    b.add_component_nodes(components)
     if schema is not None:
+        b.add_schema(schema)
+    if data_profile is not None:
+        b.add_data_profile(data_profile)
+    for c in components:
+        b.add_component_edges(c)
+    b.add_dispatch_edges(components, dispatch_edges or [])
+    b.add_cron_edges(cron_rows or [])
+    if api_rows:
+        _fold_api_rows(b.g, b.idx, api_rows, b.obj_node, b.external)
+    log.info(
+        "understand.dependencies.built",
+        nodes=len(b.g.nodes),
+        edges=len(b.g.edges),
+        unresolved=len(b.g.unresolved),
+        by_evidence=b.g.edges_by_evidence(),
+    )
+    return b.g
+
+
+class _Builder:
+    """Holds the graph under construction plus the name → node indexes."""
+
+    def __init__(self, org_alias: str) -> None:
+        self.org_alias = org_alias
+        self.g = DependencyGraph(org_alias=org_alias)
+        self.idx = _Index()
+
+    # ---- nodes ----------------------------------------------------------------
+
+    def add_component_nodes(self, components: list[Component]) -> None:
+        for c in components:
+            obj = _component_object(c)
+            n = self.g.add_node(
+                GraphNode(
+                    id=str(c.id),
+                    kind="component",
+                    category=c.category.value,
+                    name=c.name,
+                    api_name=c.api_name or c.name,
+                    object_name=obj,
+                    meta=_component_meta(c),
+                )
+            )
+            key = (c.api_name or c.name).lower()
+            if c.category is CategoryName.APEX_CLASS:
+                self.idx.apex[key] = n.id
+            elif c.category in _FLOW_CATEGORIES:
+                self.idx.flows[key] = n.id
+            elif c.category is CategoryName.WORKFLOW_RULE and obj:
+                self.idx.workflow_by_object[obj.lower()] = n.id
+                raw = c.raw if isinstance(c.raw, dict) else {}
+                for ea in raw.get("email_alerts", []):
+                    if ea.get("name"):
+                        self.idx.email_alerts[f"{obj}.{ea['name']}".lower()] = n.id
+            elif c.category is CategoryName.PLATFORM_EVENT:
+                self.idx.platform_events[key] = n.id
+            self.idx.components[(c.category.value, key)] = n.id
+
+    def add_schema(self, schema: SchemaSnapshot) -> None:
         for sn in schema.nodes:
-            n = g.add_node(
+            n = self.g.add_node(
                 GraphNode(
                     id=str(sn.id),
                     kind=sn.kind.value,
@@ -344,21 +396,49 @@ def build_graph(
             )
             low = sn.api_name.lower()
             if sn.kind is SchemaNodeKind.OBJECT:
-                idx.objects[low] = n.id
+                self.idx.objects[low] = n.id
             elif sn.kind is SchemaNodeKind.FIELD:
-                idx.fields[low] = n.id
-                idx.field_nodes[low] = sn
+                self.idx.fields[low] = n.id
+                self.idx.field_nodes[low] = sn
             else:
-                idx.record_types[low] = n.id
+                self.idx.record_types[low] = n.id
+        for sn in schema.fields():
+            for target in sn.reference_to:
+                self.g.add_edge(
+                    str(sn.id),
+                    self.obj_node(target),
+                    DependencyKind.REFERENCES,
+                    evidence=EvidenceChannel.SCHEMA,
+                    notes="lookup",
+                )
 
-    # Objects referenced by components but absent from the schema (standard
-    # objects with no custom fields, managed-package objects) get nodes on demand.
-    def obj_node(name: str) -> str:
+    def add_data_profile(self, profile: DataProfile) -> None:
+        """Attach record counts to objects and fill rates to fields (nodes created as needed)."""
+        for obj, op in profile.objects.items():
+            n = self.g.node(self.obj_node(obj))
+            if n is not None:
+                n.meta["record_count"] = op.record_count
+                n.meta["last_modified"] = op.last_modified.isoformat() if op.last_modified else None
+            for q, fp in op.fields.items():
+                fid = self.field_node(q) or self.inferred_field(obj, q.split(".", 1)[1])
+                fn = self.g.node(fid)
+                if fn is not None:
+                    fn.meta["fill_rate"] = fp.fill_rate
+                    fn.meta["non_null"] = fp.non_null
+
+    def canonical_object(self, name: str) -> str:
+        """Schema spelling for an object referenced in any case (report columns say LEAD)."""
+        nid = self.idx.objects.get(name.lower())
+        n = self.g.node(nid) if nid else None
+        return n.api_name if n else name
+
+    def obj_node(self, name: str) -> str:
+        """Object node id, created on demand for objects the schema did not supply."""
         low = name.lower()
-        if low in idx.objects:
-            return idx.objects[low]
+        if low in self.idx.objects:
+            return self.idx.objects[low]
         nid = _external_id("object", name)
-        g.add_node(
+        self.g.add_node(
             GraphNode(
                 id=nid,
                 kind="object",
@@ -369,23 +449,23 @@ def build_graph(
                 meta={"inferred": True},
             )
         )
-        idx.objects[low] = nid
+        self.idx.objects[low] = nid
         return nid
 
-    def field_node(qualified: str) -> str | None:
-        return idx.fields.get(qualified.lower())
+    def field_node(self, qualified: str) -> str | None:
+        return self.idx.fields.get(qualified.lower())
 
-    def inferred_field(obj: str, fname: str) -> str:
+    def inferred_field(self, obj: str, fname: str) -> str:
         """Create a standard-field node the source tree could not supply."""
         qualified = f"{obj}.{fname}"
-        existing = idx.fields.get(qualified.lower())
+        existing = self.idx.fields.get(qualified.lower())
         if existing:
             return existing
-        obj_node(obj)
+        self.obj_node(obj)
         nid = _external_id("field", qualified)
         target = _STANDARD_FIELD_TARGETS.get(fname.lower())
         sn = SchemaNode(
-            org_alias=org_alias,
+            org_alias=self.org_alias,
             kind=SchemaNodeKind.FIELD,
             api_name=qualified,
             object_name=obj,
@@ -393,7 +473,7 @@ def build_graph(
             custom=fname.endswith("__c"),
             reference_to=[target] if target else [],
         )
-        g.add_node(
+        self.g.add_node(
             GraphNode(
                 id=nid,
                 kind="field",
@@ -410,13 +490,13 @@ def build_graph(
                 },
             )
         )
-        idx.fields[qualified.lower()] = nid
-        idx.field_nodes[qualified.lower()] = sn
+        self.idx.fields[qualified.lower()] = nid
+        self.idx.field_nodes[qualified.lower()] = sn
         return nid
 
-    def external(kind: str, name: str) -> str:
+    def external(self, kind: str, name: str) -> str:
         nid = _external_id(kind, name)
-        g.add_node(
+        self.g.add_node(
             GraphNode(
                 id=nid,
                 kind="external",
@@ -428,47 +508,51 @@ def build_graph(
         )
         return nid
 
-    # ---- schema relationship edges ----
-    if schema is not None:
-        for sn in schema.fields():
-            for target in sn.reference_to:
-                g.add_edge(
-                    str(sn.id),
-                    obj_node(target),
-                    DependencyKind.REFERENCES,
-                    evidence=EvidenceChannel.SCHEMA,
-                    notes="lookup",
-                )
+    # ---- edges ----------------------------------------------------------------
 
-    # ---- component edges ----
-    for c in components:
+    def add_component_edges(self, c: Component) -> None:
         raw = c.raw if isinstance(c.raw, dict) else {}
         refs = raw.get("references", {}) if isinstance(raw.get("references"), dict) else {}
         src = str(c.id)
         ev = _evidence_for(c.category)
         host = _component_object(c)
+        written = _written_fields(raw)
 
-        # Trigger relationship: what does this fire on?
-        if host and c.category in {
-            CategoryName.APEX_TRIGGER,
-            CategoryName.RECORD_TRIGGERED_FLOW,
-            CategoryName.PROCESS_BUILDER,
-            CategoryName.SCHEDULE_TRIGGERED_FLOW,
-            CategoryName.FLOW_ORCHESTRATION,
-            CategoryName.WORKFLOW_RULE,
-            CategoryName.VALIDATION_RULE,
-            CategoryName.ASSIGNMENT_RULE,
-            CategoryName.AUTO_RESPONSE_RULE,
-            CategoryName.ESCALATION_RULE,
-            CategoryName.SHARING_RULE,
-            CategoryName.APPROVAL_PROCESS,
-        }:
-            g.add_edge(
-                src, obj_node(host), DependencyKind.TRIGGERS, evidence=ev, notes=_trigger_note(c)
+        self._trigger_edges(c, src, ev, host)
+        self._object_edges(refs, src, ev, host, written)
+        for f in refs.get("fields", []):
+            _link_field(self, src, c, f, ev, written)
+        defines = refs.get("defines_field")
+        if defines and (fid := self.field_node(defines)):
+            self.g.add_edge(src, fid, DependencyKind.OWNS, evidence=ev, notes="defines")
+        self._apex_edges(c, refs, src, ev)
+        self._flow_edges(c, refs, src, ev)
+        self._action_edges(c, refs, src, ev, host)
+        self._global_edges(refs, src, ev)
+        if c.category is CategoryName.PLATFORM_EVENT and host:
+            self.g.add_edge(
+                src, self.obj_node(host), DependencyKind.OWNS, evidence=ev, notes="defines event"
             )
-        if host and c.category is CategoryName.PLATFORM_EVENT_TRIGGERED_FLOW:
-            target = idx.platform_events.get(host.lower()) or obj_node(host)
-            g.add_edge(
+
+    def _trigger_edges(self, c: Component, src: str, ev: EvidenceChannel, host: str | None) -> None:
+        """What does this component fire on (or, for surfaces, what does it display)?"""
+        if not host:
+            return
+        if c.category not in AUTOMATION_CATEGORIES:
+            self.g.add_edge(
+                src, self.obj_node(host), DependencyKind.REFERENCES, evidence=ev, notes="surface"
+            )
+        elif c.category in _FIRES_ON_HOST:
+            self.g.add_edge(
+                src,
+                self.obj_node(host),
+                DependencyKind.TRIGGERS,
+                evidence=ev,
+                notes=_trigger_note(c),
+            )
+        elif c.category is CategoryName.PLATFORM_EVENT_TRIGGERED_FLOW:
+            target = self.idx.platform_events.get(host.lower()) or self.obj_node(host)
+            self.g.add_edge(
                 src,
                 target,
                 DependencyKind.TRIGGERS,
@@ -476,181 +560,189 @@ def build_graph(
                 notes="platform event subscription",
             )
 
-        # Objects read / written (whole-record DML → "write"; recordDeletes → "delete")
-        written_objs = {w[:-2] for w in _written_fields(raw) if w.endswith(".*")}
+    def _object_edges(
+        self,
+        refs: dict[str, Any],
+        src: str,
+        ev: EvidenceChannel,
+        host: str | None,
+        written: set[str],
+    ) -> None:
+        """Objects read or written as whole records ('<Obj>.*' in the written set)."""
+        written_objs = {w[:-2] for w in written if w.endswith(".*")}
+        conf = 0.9 if ev is EvidenceChannel.APEX_PARSE else 1.0
         for o in refs.get("objects", []):
             if not o or o == host:
                 continue
             note = "write" if o.lower() in written_objs else None
-            g.add_edge(
+            self.g.add_edge(
                 src,
-                obj_node(o),
+                self.obj_node(o),
                 DependencyKind.REFERENCES,
                 evidence=ev,
-                confidence=0.9 if ev is EvidenceChannel.APEX_PARSE else 1.0,
+                confidence=conf,
                 notes=note,
             )
-
-        # Fields
-        for f in refs.get("fields", []):
-            _link_field(
-                g, idx, src, c, f, ev, field_node, obj_node, inferred_field, _written_fields(raw)
+        for cs in refs.get("custom_settings", []):
+            self.g.add_edge(
+                src,
+                self.obj_node(cs),
+                DependencyKind.REFERENCES,
+                evidence=ev,
+                notes="custom setting",
             )
 
-        # Defines a field (formula / rollup)
-        defines = refs.get("defines_field")
-        if defines:
-            fid = field_node(defines)
-            if fid:
-                g.add_edge(src, fid, DependencyKind.OWNS, evidence=ev, notes="defines")
-
-        # Apex classes
+    def _apex_edges(
+        self, c: Component, refs: dict[str, Any], src: str, ev: EvidenceChannel
+    ) -> None:
+        conf = 0.95 if ev is EvidenceChannel.APEX_PARSE else 1.0
+        if refs.get("dynamic_access"):
+            conf = min(conf, 0.75)  # the class also reaches things we cannot see
+        grant = c.category in _SECURITY
+        kind = DependencyKind.REFERENCES if grant else DependencyKind.CALLS
         for cls in refs.get("apex_classes", []):
-            tid = idx.apex.get(cls.lower())
+            tid = self.idx.apex.get(cls.lower())
             if tid:
-                g.add_edge(
+                self.g.add_edge(
                     src,
                     tid,
-                    DependencyKind.CALLS,
+                    kind,
                     evidence=ev,
-                    confidence=0.95 if ev is EvidenceChannel.APEX_PARSE else 1.0,
+                    confidence=conf,
+                    notes="class access" if grant else None,
                 )
-            elif "." in cls and cls.split(".", 1)[1].lower() in idx.apex:
+                continue
+            if "." in cls and (tid := self.idx.apex.get(cls.split(".", 1)[1].lower())):
                 # namespaced reference to an unmanaged class: Ns.Class
-                g.add_edge(
+                self.g.add_edge(src, tid, DependencyKind.CALLS, evidence=ev, confidence=0.8)
+                continue
+            if ev is EvidenceChannel.APEX_PARSE and not _looks_like_class(cls):
+                continue
+            self.g.unresolved.append(UnresolvedReference(src, c.name, "apex_class", cls, ev))
+        for cls in refs.get("async_targets", []) + refs.get("type_forname", []):
+            tid = self.idx.apex.get(cls.lower())
+            if tid:
+                self.g.add_edge(src, tid, DependencyKind.CALLS, evidence=ev, notes="async/dynamic")
+        for lwc in refs.get("lwc_bundles", []):
+            tid = self.idx.components.get(("lwc_bundle", lwc.lower()))
+            if tid:
+                self.g.add_edge(
+                    src, tid, DependencyKind.CALLS, evidence=ev, notes="embedded component"
+                )
+
+    def _flow_edges(
+        self, c: Component, refs: dict[str, Any], src: str, ev: EvidenceChannel
+    ) -> None:
+        grant = c.category in _SECURITY
+        for fl in refs.get("flows", []):
+            tid = self.idx.flows.get(fl.lower())
+            if tid:
+                self.g.add_edge(
                     src,
-                    idx.apex[cls.split(".", 1)[1].lower()],
-                    DependencyKind.CALLS,
+                    tid,
+                    DependencyKind.REFERENCES if grant else DependencyKind.CALLS,
                     evidence=ev,
-                    confidence=0.8,
+                    notes="flow access" if grant else "subflow/flow action",
                 )
             else:
-                if ev is EvidenceChannel.APEX_PARSE and not _looks_like_class(cls):
-                    continue
-                g.unresolved.append(UnresolvedReference(src, c.name, "apex_class", cls, ev))
-        for cls in refs.get("async_targets", []) + refs.get("type_forname", []):
-            tid = idx.apex.get(cls.lower())
+                self.g.unresolved.append(UnresolvedReference(src, c.name, "flow", fl, ev))
+        for pe in refs.get("platform_events", []):
+            tid = self.idx.platform_events.get(pe.lower())
             if tid:
-                g.add_edge(src, tid, DependencyKind.CALLS, evidence=ev, notes="async/dynamic")
+                self.g.add_edge(src, tid, DependencyKind.REFERENCES, evidence=ev, notes="event")
 
-        # Flows
-        for fl in refs.get("flows", []):
-            tid = idx.flows.get(fl.lower())
-            if tid:
-                g.add_edge(src, tid, DependencyKind.CALLS, evidence=ev, notes="subflow/flow action")
-            else:
-                g.unresolved.append(UnresolvedReference(src, c.name, "flow", fl, ev))
-
-        # Email alerts (Flow → workflow alert on object) / templates
+    def _action_edges(
+        self, c: Component, refs: dict[str, Any], src: str, ev: EvidenceChannel, host: str | None
+    ) -> None:
+        """Email alerts, templates, workflow actions, named credentials, labels."""
         for alert in refs.get("email_alerts", []):
-            tid = idx.email_alerts.get(alert.lower())
+            tid = self.idx.email_alerts.get(alert.lower())
             if tid:
-                g.add_edge(
+                self.g.add_edge(
                     src, tid, DependencyKind.REFERENCES, evidence=ev, notes=f"email alert {alert}"
                 )
             else:
-                g.add_edge(
+                self.g.add_edge(
                     src,
-                    external("EmailAlert", alert),
+                    self.external("EmailAlert", alert),
                     DependencyKind.REFERENCES,
                     evidence=ev,
                     confidence=0.8,
                 )
         for tpl in refs.get("email_templates", []):
-            g.add_edge(src, external("EmailTemplate", tpl), DependencyKind.REFERENCES, evidence=ev)
-
-        # Approval workflow actions live in the object's workflow file
-        for wa in refs.get("workflow_actions", []):
-            wid = idx.workflow_by_object.get((host or "").lower())
-            if wid:
-                g.add_edge(src, wid, DependencyKind.REFERENCES, evidence=ev, notes=wa)
-            else:
-                g.unresolved.append(UnresolvedReference(src, c.name, "action", wa, ev))
-
-        # Platform events published/consumed
-        for pe in refs.get("platform_events", []):
-            tid = idx.platform_events.get(pe.lower())
-            if tid:
-                g.add_edge(src, tid, DependencyKind.REFERENCES, evidence=ev, notes="event")
-
-        # Named credentials / labels / settings / globals → external nodes
-        for nc in refs.get("named_credentials", []):
-            g.add_edge(src, external("NamedCredential", nc), DependencyKind.REFERENCES, evidence=ev)
-        for lb in refs.get("custom_labels", []):
-            g.add_edge(src, external("CustomLabel", lb), DependencyKind.REFERENCES, evidence=ev)
-        for cs in refs.get("custom_settings", []):
-            g.add_edge(
-                src, obj_node(cs), DependencyKind.REFERENCES, evidence=ev, notes="custom setting"
+            self.g.add_edge(
+                src, self.external("EmailTemplate", tpl), DependencyKind.REFERENCES, evidence=ev
             )
+        for wa in refs.get("workflow_actions", []):
+            wid = self.idx.workflow_by_object.get((host or "").lower())
+            if wid:
+                self.g.add_edge(src, wid, DependencyKind.REFERENCES, evidence=ev, notes=wa)
+            else:
+                self.g.unresolved.append(UnresolvedReference(src, c.name, "action", wa, ev))
+        for nc in refs.get("named_credentials", []):
+            self.g.add_edge(
+                src, self.external("NamedCredential", nc), DependencyKind.REFERENCES, evidence=ev
+            )
+        for lb in refs.get("custom_labels", []):
+            self.g.add_edge(
+                src, self.external("CustomLabel", lb), DependencyKind.REFERENCES, evidence=ev
+            )
+
+    def _global_edges(self, refs: dict[str, Any], src: str, ev: EvidenceChannel) -> None:
+        """``$Setup.X.Y``, ``$Permission.Z``, ``$User.Field`` and friends."""
         for gl in refs.get("globals", []):
-            head = gl.split(".", 1)[0]
+            head, _, rest = gl.partition(".")
             if head in {"$Setup", "$CustomMetadata"} and gl.count(".") >= 2:
-                _, obj, fld = gl.split(".", 2)
-                fid = field_node(f"{obj}.{fld.split('.')[0]}")
-                if fid:
-                    g.add_edge(src, fid, DependencyKind.REFERENCES, evidence=ev, notes=gl)
-                else:
-                    g.add_edge(src, obj_node(obj), DependencyKind.REFERENCES, evidence=ev, notes=gl)
+                obj, _, fld = rest.partition(".")
+                target = self.field_node(f"{obj}.{fld.split('.')[0]}") or self.obj_node(obj)
+                self.g.add_edge(src, target, DependencyKind.REFERENCES, evidence=ev, notes=gl)
             elif head in {"$Permission", "$Label"}:
-                g.add_edge(
+                self.g.add_edge(
+                    src, self.external(head[1:], rest or gl), DependencyKind.REFERENCES, evidence=ev
+                )
+            elif head in _USER_CONTEXT_GLOBALS:
+                fid = self.field_node(f"{head[1:]}.{rest}") if rest else None
+                self.g.add_edge(
                     src,
-                    external(head[1:], gl.split(".", 1)[1] if "." in gl else gl),
+                    fid or self.obj_node(head[1:]),
                     DependencyKind.REFERENCES,
                     evidence=ev,
-                )
-            elif head in {"$User", "$Profile", "$UserRole", "$Organization"}:
-                fid = field_node(f"{head[1:]}.{gl.split('.', 1)[1]}") if "." in gl else None
-                g.add_edge(
-                    src, fid or obj_node(head[1:]), DependencyKind.REFERENCES, evidence=ev, notes=gl
+                    notes=gl,
                 )
 
-        # Platform event definition → its fields (OWNS) so event consumers link through
-        if c.category is CategoryName.PLATFORM_EVENT and host:
-            g.add_edge(src, obj_node(host), DependencyKind.OWNS, evidence=ev, notes="defines event")
+    def add_dispatch_edges(
+        self, components: list[Component], dispatch_edges: list[DispatchEdge]
+    ) -> None:
+        """CMT-driven dispatch: trigger (or dispatcher class) → handler class."""
+        for de in dispatch_edges:
+            tid = self.idx.apex.get(de.handler_class.lower())
+            if tid is None:
+                continue
+            src_id = _dispatch_source(components, self.idx, de)
+            if src_id:
+                self.g.add_edge(
+                    src_id,
+                    tid,
+                    DependencyKind.DISPATCHES,
+                    evidence=EvidenceChannel.CMT_DISPATCH,
+                    confidence=de.confidence,
+                    notes=f"{de.dispatcher_cmt}.{de.field_name}",
+                )
 
-    # ---- CMT dispatch (trigger → dispatcher → handler) ----
-    for de in dispatch_edges or []:
-        tid = idx.apex.get(de.handler_class.lower())
-        if tid is None:
-            continue
-        # Source = the trigger on the CMT row's object if we can find one, else the dispatcher class.
-        src_id = _dispatch_source(components, idx, de)
-        if src_id:
-            g.add_edge(
-                src_id,
-                tid,
-                DependencyKind.DISPATCHES,
-                evidence=EvidenceChannel.CMT_DISPATCH,
-                confidence=de.confidence,
-                notes=f"{de.dispatcher_cmt}.{de.field_name}",
-            )
-
-    # ---- CronTrigger rows ----
-    for row in cron_rows or []:
-        cls = str(row.get("apex_class") or (row.get("CronJobDetail") or {}).get("Name") or "")
-        tid = idx.apex.get(cls.lower())
-        if tid:
-            nid = external("CronTrigger", str((row.get("CronJobDetail") or {}).get("Name") or cls))
-            g.add_edge(
-                nid,
-                tid,
-                DependencyKind.TRIGGERS,
-                evidence=EvidenceChannel.CRON,
-                notes=str(row.get("CronExpression") or ""),
-            )
-
-    # ---- Dependency API cross-check (AD-28) ----
-    if api_rows:
-        _fold_api_rows(g, idx, api_rows, obj_node, external)
-
-    log.info(
-        "understand.dependencies.built",
-        nodes=len(g.nodes),
-        edges=len(g.edges),
-        unresolved=len(g.unresolved),
-        by_evidence=g.edges_by_evidence(),
-    )
-    return g
+    def add_cron_edges(self, cron_rows: list[dict[str, Any]]) -> None:
+        for row in cron_rows:
+            detail = row.get("CronJobDetail") or {}
+            cls = str(row.get("apex_class") or detail.get("Name") or "")
+            tid = self.idx.apex.get(cls.lower())
+            if tid:
+                nid = self.external("CronTrigger", str(detail.get("Name") or cls))
+                self.g.add_edge(
+                    nid,
+                    tid,
+                    DependencyKind.TRIGGERS,
+                    evidence=EvidenceChannel.CRON,
+                    notes=str(row.get("CronExpression") or ""),
+                )
 
 
 # ---- helpers ------------------------------------------------------------------
@@ -669,7 +761,24 @@ def _component_object(c: Component) -> str | None:
     return None
 
 
+def _component_meta(c: Component) -> dict[str, Any]:
+    raw = c.raw if isinstance(c.raw, dict) else {}
+    meta: dict[str, Any] = {"content_hash": c.content_hash, "active": _component_active(c)}
+    if c.category is CategoryName.APEX_CLASS:
+        meta["is_test"] = bool(raw.get("is_test"))
+        meta["dynamic_access"] = list(raw.get("dynamic_access", []))
+    if c.category not in AUTOMATION_CATEGORIES:
+        meta["surface"] = str(raw.get("surface", ""))
+    return meta
+
+
 def _evidence_for(cat: CategoryName) -> EvidenceChannel:
+    if cat in {CategoryName.PAGE_LAYOUT, CategoryName.FLEXIPAGE}:
+        return EvidenceChannel.LAYOUT_XML
+    if cat in _SECURITY:
+        return EvidenceChannel.PERMISSION_XML
+    if cat is CategoryName.REPORT:
+        return EvidenceChannel.REPORT_XML
     if cat in {CategoryName.APEX_CLASS, CategoryName.APEX_TRIGGER}:
         return EvidenceChannel.APEX_PARSE
     if cat in _FLOW_CATEGORIES:
@@ -731,16 +840,7 @@ def _looks_like_class(name: str) -> bool:
 
 
 def _link_field(
-    g: DependencyGraph,
-    idx: _Index,
-    src: str,
-    c: Component,
-    qualified: str,
-    ev: EvidenceChannel,
-    field_node: Any,
-    obj_node: Any,
-    inferred_field: Any,
-    written: set[str],
+    b: _Builder, src: str, c: Component, qualified: str, ev: EvidenceChannel, written: set[str]
 ) -> None:
     """Resolve 'Object.path.to.Field' and add an edge per hop.
 
@@ -752,40 +852,38 @@ def _link_field(
         return
     obj, path = qualified.split(".", 1)
     segments = path.split(".")
-    cur_obj = obj
+    cur_obj = b.canonical_object(obj)
+    conf = 0.9 if ev is EvidenceChannel.APEX_PARSE else 1.0
     for i, seg in enumerate(segments):
         last = i == len(segments) - 1
         fname = seg if last else _relationship_to_field(seg)
-        fid = field_node(f"{cur_obj}.{fname}")
-        if fid is None and not last:
-            fid = field_node(f"{cur_obj}.{seg}")
-            if fid is not None:
-                fname = seg
+        fid = b.field_node(f"{cur_obj}.{fname}")
+        if fid is None and not last and (fid := b.field_node(f"{cur_obj}.{seg}")):
+            fname = seg
         if fid is None:
             if fname.endswith("__c") and not cur_obj.endswith(("__mdt", "__e", "__b", "__x")):
-                g.unresolved.append(UnresolvedReference(src, c.name, "field", qualified, ev))
-                g.add_edge(
+                b.g.unresolved.append(UnresolvedReference(src, c.name, "field", qualified, ev))
+                b.g.add_edge(
                     src,
-                    obj_node(cur_obj),
+                    b.obj_node(cur_obj),
                     DependencyKind.REFERENCES,
                     evidence=ev,
                     confidence=0.7,
                     notes=f"unresolved field {qualified}",
                 )
                 return
-            fid = inferred_field(cur_obj, fname)
+            fid = b.inferred_field(cur_obj, fname)
         q = f"{cur_obj}.{fname}".lower()
         note = "write" if last and q in written else "read"
-        conf = 1.0 if ev is not EvidenceChannel.APEX_PARSE else 0.9
-        g.add_edge(src, fid, DependencyKind.REFERENCES, evidence=ev, confidence=conf, notes=note)
+        b.g.add_edge(src, fid, DependencyKind.REFERENCES, evidence=ev, confidence=conf, notes=note)
         if last:
             return
-        sn = idx.field_nodes.get(f"{cur_obj}.{fname}".lower())
+        sn = b.idx.field_nodes.get(q)
         if sn and sn.reference_to and sn.reference_to[0]:
             cur_obj = sn.reference_to[0]
             continue
         # Polymorphic or unknown hop: stop here, keep what we have.
-        g.unresolved.append(UnresolvedReference(src, c.name, "field", qualified, ev))
+        b.g.unresolved.append(UnresolvedReference(src, c.name, "field", qualified, ev))
         return
 
 
@@ -815,10 +913,15 @@ def _dispatch_source(components: list[Component], idx: _Index, de: DispatchEdge)
                 obj = raw.get("sobject", "") or ""
                 if obj and de.dispatcher_cmt.lower().startswith(obj.lower()):
                     return str(c.id)
-    # Any dispatcher-looking class
-    for name, nid in idx.apex.items():
-        if "triggerhandler" in name or "dispatcher" in name:
-            return nid
+    # Fall back to the dispatcher class the row's trigger actually calls; never a random handler.
+    for c in components:
+        if c.category is CategoryName.APEX_TRIGGER:
+            raw = c.raw if isinstance(c.raw, dict) else {}
+            refs = raw.get("references", {}) if isinstance(raw.get("references"), dict) else {}
+            for cls in refs.get("apex_classes", []):
+                low = cls.lower()
+                if ("triggerhandler" in low or "dispatcher" in low) and low in idx.apex:
+                    return idx.apex[low]
     return None
 
 
@@ -849,6 +952,26 @@ def _fold_api_rows(
             return idx.workflow_by_object.get(name.split(".", 1)[0].lower())
         if t == "lightningcomponentbundle":
             return idx.components.get(("lwc_bundle", low))
+        if t in {"layout", "flexipage", "permissionset", "profile"}:
+            cat = {
+                "layout": "page_layout",
+                "flexipage": "flexipage",
+                "permissionset": "permission_set",
+                "profile": "profile",
+            }[t]
+            return idx.components.get((cat, low)) or str(external(mtype, name))
+        if t == "report":
+            hit = idx.components.get(("report", low))
+            if hit is None:  # API rows carry the developer name without the folder
+                hit = next(
+                    (
+                        nid
+                        for (cat, key), nid in idx.components.items()
+                        if cat == "report" and key.rsplit("/", 1)[-1] == low
+                    ),
+                    None,
+                )
+            return hit or str(external(mtype, name))
         if t == "approvalprocess":
             return idx.components.get(("approval_process", low))
         if t in {

@@ -160,3 +160,8 @@ def _addmonths(d: _dt.date | _dt.datetime | None, months: int) -> _dt.date | Non
     if isinstance(d, _dt.datetime):
         return d.replace(year=year, month=month, day=day)
     return _dt.date(year, month, day)
+
+
+def _concat(a: Any, b: Any) -> str:
+    """Salesforce ``&``: string concatenation where NULL reads as ''."""
+    return ("" if a is None else str(a)) + ("" if b is None else str(b))

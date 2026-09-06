@@ -34,6 +34,7 @@ def analysis_payload(record: ReconciledRecord, body_key: str) -> dict[str, Any]:
         "custom_labels": a.get("custom_labels", []),
         "custom_settings": a.get("custom_settings", []),
         "type_forname": a.get("type_forname_literals", []),
+        "dynamic_access": a.get("dynamic_access", []),
         "async_targets": [
             x["target_class"] for x in a.get("async_calls", []) if x.get("target_class")
         ],
@@ -44,6 +45,8 @@ def analysis_payload(record: ReconciledRecord, body_key: str) -> dict[str, Any]:
         "body_lines": body.count("\n") + 1 if body else 0,
         "analysis": a,
         "entry_points": a.get("entry_points", []),
+        "is_test": bool(a.get("is_test")),
+        "dynamic_access": a.get("dynamic_access", []),
         "references": refs,
     }
 

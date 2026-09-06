@@ -12,10 +12,10 @@ generated module exposes both:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from offramp.core.models import Component
+from offramp.generate._ids import safe_id
 
 
 @dataclass(frozen=True)
@@ -25,13 +25,6 @@ class GeneratedAgent:
     agent_id: str
     builder_name: str  # Python factory function name
     code: str
-
-
-def _safe_id(s: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", s)
-    if not cleaned or cleaned[0].isdigit():
-        cleaned = f"a_{cleaned}"
-    return cleaned
 
 
 _HEADER = '''\
@@ -49,7 +42,7 @@ from typing import Any
 
 
 def translate(component: Component) -> GeneratedAgent:
-    name = _safe_id(component.api_name or component.name)
+    name = safe_id(component.api_name or component.name, prefix="a_")
     builder = f"build_{name}"
     code = (
         _HEADER

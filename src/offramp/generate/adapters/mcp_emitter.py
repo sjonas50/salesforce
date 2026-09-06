@@ -8,9 +8,9 @@ publicly.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
+from offramp.generate._ids import safe_id
 from offramp.generate.adapters.detector import PackageDependency
 
 
@@ -35,16 +35,9 @@ from typing import Any
 '''
 
 
-def _safe_id(s: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", s)
-    if not cleaned or cleaned[0].isdigit():
-        cleaned = f"a_{cleaned}"
-    return cleaned
-
-
 def emit(dep: PackageDependency) -> GeneratedAdapter:
     """Auto-emit a generic adapter for a managed-package namespace."""
-    safe_pkg = _safe_id(dep.package_name)
+    safe_pkg = safe_id(dep.package_name)
     components_doc = ", ".join(dep.contributing_components[:5])
     if len(dep.contributing_components) > 5:
         components_doc += f", ... ({len(dep.contributing_components)} total)"

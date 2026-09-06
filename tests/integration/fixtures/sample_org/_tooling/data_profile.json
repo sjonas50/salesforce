@@ -1,0 +1,20 @@
+{
+    "Lead": {
+        "record_count": 12400,
+        "last_modified": "2026-09-04T18:22:00+00:00",
+        "fields": {"Country__c": 12100, "Territory__c": 9800, "Score__c": 7300, "Routed__c": 11900, "Legacy_Segment__c": 1450, "Old_Segment__c": 0, "Archived_Reason__c": 0, "Test_Flag__c": 3}
+    },
+    "Opportunity": {
+        "record_count": 3900,
+        "last_modified": "2026-09-05T09:10:00+00:00",
+        "fields": {"Discount__c": 2600, "DiscountedAmount__c": 3900, "Legacy_Notes__c": 0}
+    },
+    "Territory__c": {
+        "record_count": 42,
+        "fields": {"Country_Code__c": 42, "Owner__c": 40, "Queue_Id__c": 2}
+    },
+    "Account": {
+        "record_count": 5100,
+        "fields": {"IsStrategic__c": 310, "AnnualRevenueK__c": 4800, "OpenOpportunityCount__c": 5100}
+    }
+}

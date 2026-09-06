@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Layout xmlns="http://soap.sforce.com/2006/04/metadata">
+    <layoutSections>
+        <label>Information</label>
+        <layoutColumns>
+            <layoutItems><behavior>Required</behavior><field>Name</field></layoutItems>
+            <layoutItems><behavior>Edit</behavior><field>Amount</field></layoutItems>
+            <layoutItems><behavior>Edit</behavior><field>Discount__c</field></layoutItems>
+        </layoutColumns>
+        <layoutColumns>
+            <layoutItems><behavior>Edit</behavior><field>StageName</field></layoutItems>
+            <layoutItems><behavior>Edit</behavior><field>Legacy_Notes__c</field></layoutItems>
+        </layoutColumns>
+    </layoutSections>
+    <relatedLists>
+        <fields>NAME</fields>
+        <relatedList>RelatedContactRoleList</relatedList>
+    </relatedLists>
+    <quickActionList>
+        <quickActionListItems><quickActionName>Opportunity.Submit_Discount</quickActionName></quickActionListItems>
+    </quickActionList>
+</Layout>

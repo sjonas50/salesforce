@@ -99,13 +99,22 @@ def load_dependency_graph(handle: GraphHandle, dep: DependencyGraph) -> tuple[in
             """,
             params={"rows": rows},
         )
-    handle.graph.query("CREATE INDEX FOR (n:Component) ON (n.id)")
-    handle.graph.query("CREATE INDEX FOR (n:Field) ON (n.id)")
-    handle.graph.query("CREATE INDEX FOR (n:Object) ON (n.id)")
+    for label in sorted(set(_LABELS.values())):
+        with contextlib.suppress(Exception):  # index may already exist on a reused graph name
+            handle.graph.query(f"CREATE INDEX FOR (n:{label}) ON (n.id)")
 
-    by_kind: dict[str, list[dict[str, Any]]] = {}
+    by_kind: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for e in dep.edges:
-        by_kind.setdefault(e.kind.value.upper(), []).append(
+        s_node = dep.node(str(e.source_id))
+        t_node = dep.node(str(e.target_id))
+        if s_node is None or t_node is None:
+            continue
+        key = (
+            e.kind.value.upper(),
+            _LABELS.get(s_node.kind, "External"),
+            _LABELS.get(t_node.kind, "External"),
+        )
+        by_kind.setdefault(key, []).append(
             {
                 "s": str(e.source_id),
                 "t": str(e.target_id),
@@ -116,11 +125,11 @@ def load_dependency_graph(handle: GraphHandle, dep: DependencyGraph) -> tuple[in
             }
         )
     written = 0
-    for rel, rows in by_kind.items():
+    for (rel, s_label, t_label), rows in by_kind.items():
         handle.graph.query(
             f"""
             UNWIND $rows AS row
-            MATCH (s {{id: row.s}}), (t {{id: row.t}})
+            MATCH (s:{s_label} {{id: row.s}}), (t:{t_label} {{id: row.t}})
             CREATE (s)-[:{rel} {{evidence: row.evidence, confidence: row.confidence, api: row.api, notes: row.notes}}]->(t)
             """,
             params={"rows": rows},
@@ -128,32 +137,3 @@ def load_dependency_graph(handle: GraphHandle, dep: DependencyGraph) -> tuple[in
         written += len(rows)
     log.info("understand.graph.loaded", graph=handle.name, nodes=len(dep.nodes), edges=written)
     return len(dep.nodes), written
-
-
-# ---- back-compat shims used by older callers/tests ----------------------------
-
-
-def load_components(handle: GraphHandle, components: list[Any]) -> int:
-    """Legacy: load bare Component nodes (no edges). Prefer :func:`load_dependency_graph`."""
-    if not components:
-        return 0
-    handle.reset()
-    rows = [
-        {
-            "id": str(c.id),
-            "category": c.category.value,
-            "name": c.name,
-            "api_name": c.api_name or c.name,
-            "namespace": c.namespace or "",
-            "content_hash": c.content_hash,
-        }
-        for c in components
-    ]
-    handle.graph.query(
-        """
-        UNWIND $rows AS row
-        CREATE (n:Component {id: row.id, category: row.category, name: row.name, api_name: row.api_name, namespace: row.namespace, content_hash: row.content_hash})
-        """,
-        params={"rows": rows},
-    )
-    return len(rows)

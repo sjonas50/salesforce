@@ -1,8 +1,8 @@
 """Redis Streams backend (dev / scratch infra).
 
-Phase 0 stubs the wire calls behind a clear NotImplementedError so callers
-get a helpful message until the redis client is added in Phase 1. The full
-impl lands when the first cross-component message ships (Phase 1: extract →
+The wire calls sit behind a clear NotImplementedError so callers get a
+helpful message until the redis client is added. The full implementation
+lands when the first cross-component message ships (extract →
 understand handoff).
 """
 
@@ -25,7 +25,7 @@ class RedisStreamsEventBus:
 
     async def publish(self, topic: str, payload: dict[str, Any]) -> Event:
         raise NotImplementedError(
-            "RedisStreamsEventBus.publish lands in Phase 1 — add `redis>=5` to "
+            "RedisStreamsEventBus.publish is not implemented — add `redis>=5` to "
             "deps and wire the client. Use `InMemoryEventBus` for tests until then."
         )
 
@@ -37,5 +37,5 @@ class RedisStreamsEventBus:
         block_ms: int = 1000,
     ) -> AsyncIterator[Event]:
         raise NotImplementedError(
-            "RedisStreamsEventBus.subscribe lands in Phase 1 alongside publish."
+            "RedisStreamsEventBus.subscribe is not implemented (see publish)."
         )

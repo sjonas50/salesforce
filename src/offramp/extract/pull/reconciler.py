@@ -2,9 +2,9 @@
 
 Documented precedence (architecture §C1, v2.1 plan §7.2):
 
-* **Salto** wins for resolved references (cross-object, cross-namespace).
-* **sf CLI** wins for source-of-truth XML payloads.
+* **sf CLI** (Metadata API bodies) wins for source-of-truth payloads.
 * **Tooling API** wins for runtime state (active version, last execution).
+* Directory readers (``sfdx_project``, ``fixture``) rank below live sources.
 
 When sources disagree on a field, the precedence rule applies and the
 disagreement is captured as a :class:`PullDisagreement` for the coverage
@@ -26,10 +26,13 @@ log = get_logger(__name__)
 
 
 # Lower = higher priority. Sources not in the table sort last (priority 99).
+_BODY_KEYS = frozenset({"raw_xml", "parsed", "partial"})
+
 _DEFAULT_PRECEDENCE: dict[str, int] = {
-    "salto": 0,
     "sf_cli": 1,
+    "metadata_api": 1,
     "tooling_api": 2,
+    "sfdx_project": 10,
     "fixture": 50,  # tests only — never wins over a real source
 }
 
@@ -84,8 +87,16 @@ def reconcile(
         # field-level merge with disagreement detection.
         bucket.sort(key=lambda r: pri.get(r.source, 99))
         canonical: dict[str, Any] = {}
+        body_source: str | None = None  # first source that carried a metadata body
         for r in bucket:
+            has_body = "raw_xml" in r.payload or "parsed" in r.payload
+            if has_body and body_source is None:
+                body_source = r.source
             for k, v in r.payload.items():
+                # A lower-precedence body (e.g. a Tooling 'partial' stub) must not
+                # sit next to the winner's full body: the extractors prefer 'parsed'.
+                if k in _BODY_KEYS and body_source is not None and r.source != body_source:
+                    continue
                 if k not in canonical:
                     canonical[k] = v
                     continue

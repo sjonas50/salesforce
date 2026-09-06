@@ -334,8 +334,8 @@ class _Parser:
         while self.peek().kind in {TokenKind.PLUS, TokenKind.MINUS, TokenKind.AMP}:
             tok = self.take()
             right = self._parse_mul()
-            # '&' is string concatenation; the emitter's '+' on str operands matches.
-            left = BinaryOp("+" if tok.kind is TokenKind.AMP else tok.text, left, right)
+            # '&' is string concatenation; the emitter maps it to _concat().
+            left = BinaryOp("&" if tok.kind is TokenKind.AMP else tok.text, left, right)
         return left
 
     def _parse_mul(self) -> Node:

@@ -77,7 +77,6 @@ def _ensure_loaded() -> None:
     global _LOADED
     if _LOADED:
         return
-    _LOADED = True
     import importlib
 
     for mod in (
@@ -89,6 +88,7 @@ def _ensure_loaded() -> None:
         "offramp.extract.categories.formula_field",
         "offramp.extract.categories.rules",
         "offramp.extract.categories.rollup_summary",
+        "offramp.extract.categories.surfaces",
         "offramp.extract.categories.platform_event",
         "offramp.extract.categories.validation_rule",
         "offramp.extract.categories.workflow_rule",
@@ -99,6 +99,7 @@ def _ensure_loaded() -> None:
     from offramp.extract.lwc.bundle import LWCBundleExtractor
 
     _REGISTRY.setdefault(CategoryName.LWC_BUNDLE, LWCBundleExtractor)
+    _LOADED = True
 
 
 def register(cls: type[CategoryExtractor]) -> type[CategoryExtractor]:

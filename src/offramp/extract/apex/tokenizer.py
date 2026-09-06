@@ -33,9 +33,6 @@ class Tok:
         return self.text.lower()
 
 
-_COMMENT_BLOCK = re.compile(r"/\*.*?\*/", re.S)
-_COMMENT_LINE = re.compile(r"//[^\n]*")
-
 _TOKEN = re.compile(
     r"""
       (?P<ws>\s+)
@@ -50,12 +47,36 @@ _TOKEN = re.compile(
 
 
 def strip_comments(source: str) -> str:
-    """Replace comments with spaces (keeping newlines so line numbers hold)."""
+    """Replace comments with spaces, leaving string literals and newlines intact.
 
-    def _blank(m: re.Match[str]) -> str:
-        return re.sub(r"[^\n]", " ", m.group())
-
-    return _COMMENT_LINE.sub(_blank, _COMMENT_BLOCK.sub(_blank, source))
+    A single left-to-right pass so that ``'http://x'`` or ``'a /* b'`` inside a
+    string literal is never mistaken for a comment.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(source)
+    while i < n:
+        ch = source[i]
+        if ch == "'":
+            j = i + 1
+            while j < n and source[j] != "'" and source[j] != "\n":
+                j += 2 if source[j] == "\\" else 1
+            out.append(source[i : j + 1])
+            i = j + 1
+        elif source.startswith("//", i):
+            j = source.find("\n", i)
+            j = n if j == -1 else j
+            out.append(" " * (j - i))
+            i = j
+        elif source.startswith("/*", i):
+            j = source.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            out.append("".join("\n" if c == "\n" else " " for c in source[i:j]))
+            i = j
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def tokenize(source: str) -> list[Tok]:

@@ -469,11 +469,10 @@ def _scan_text(text: str, host: str, fields: set[str], globals_: set[str]) -> No
     ):
         refs = extract_references(text)
         for g in refs.globals:
-            if g.startswith("$Record"):
-                if host:
-                    fields.add(f"{host}.{g.split('.', 1)[1]}") if "." in g else None
-            else:
+            if not g.startswith("$Record"):
                 globals_.add(g)
+            elif host and "." in g:
+                fields.add(f"{host}.{g.split('.', 1)[1]}")
 
 
 class _FlowVariantBase(CategoryExtractor):

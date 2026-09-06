@@ -1,8 +1,8 @@
 """Pull-layer contracts.
 
-Three real Phase 1 sources (Salto, sf CLI, Tooling API) plus a
-fixture-backed client used by tests. All return ``RawMetadataRecord``
-instances; the per-category extractors consume those.
+Two real sources (Tooling/REST, sf CLI) plus the directory-backed clients
+(fixtures, SFDX projects). All return ``RawMetadataRecord`` instances; the
+per-category extractors consume those (AD-29).
 """
 
 from __future__ import annotations
@@ -19,12 +19,13 @@ from offramp.core.models import CategoryName
 class RawMetadataRecord:
     """One untyped metadata record straight from a pull source.
 
-    The :attr:`payload` shape varies by source — Salto emits NaCl-as-dict,
-    sf CLI emits XML-as-dict, Tooling API emits SObject rows. The reconciler
-    is responsible for collapsing them into a single canonical Component.
+    The :attr:`payload` shape varies by source — directory readers carry
+    ``raw_xml`` (plus Apex bodies), the Tooling client carries ``parsed``
+    metadata dicts. The reconciler collapses multi-source records into one
+    canonical view.
     """
 
-    source: str  # 'salto' | 'sf_cli' | 'tooling_api' | 'fixture'
+    source: str  # 'tooling_api' | 'sf_cli' | 'sfdx_project' | 'fixture'
     source_version: str
     api_version: str
     category: CategoryName

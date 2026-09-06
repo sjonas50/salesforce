@@ -6,9 +6,9 @@ allocation, one runaway shadow run can starve cutover writes.
 
 The allocator polls ``/limits`` on a schedule, splits the remaining budget
 across registered processes by configured weight, and rejects calls that
-would push a process over its share. Phase 3 ships the allocator + a
-test-friendly in-memory ``LimitsSource``; the production REST poller lands
-when the real Salesforce backend is wired (Phase 5 deploy).
+would push a process over its share. Ships with the allocator + a
+test-friendly in-memory ``LimitsSource``; the hosted service wires the
+production ``/limits`` REST poller.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ class QuotaAllocator:
     * a :class:`LimitsSource` that reports org-wide remaining capacity
     * a per-process registration with a ``weight`` that determines its
       proportional share
-    * a poll loop (caller-driven via :meth:`refresh`) — Phase 5 will run it
+    * a poll loop (caller-driven via :meth:`refresh`) — the hosted service runs it
       as a background task when the gateway is deployed
     """
 

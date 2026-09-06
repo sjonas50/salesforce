@@ -18,13 +18,14 @@ Reverse-engineer a Salesforce org into a dependency graph that shows its work: e
 
 | Area | What works today | Tests |
 |---|---|---|
-| Extraction | Fixture / SFDX directories (C19), REST + Tooling API through the MCP gateway, sf CLI retrieve with re-split on size limits. All 21 categories normalized; no passthrough. | `test_source_tree_and_schema.py`, `test_tooling_pull_client.py`, `test_sf_cli_pull_client.py` |
-| Apex analysis | Tokenizer-based reference extraction: class graph, SOQL/DML targets, field reads and writes, callouts, named credentials, async targets, entry points (C20). | `test_apex_analyzer.py` |
+| Extraction | Fixture / SFDX directories (C19), REST + Tooling API through the MCP gateway with a Metadata API retrieve (no CLI) for what Tooling cannot read, sf CLI retrieve with re-split on size limits. 21 automation categories + 5 surface categories (layouts, Lightning pages, permission sets, profiles, reports); no passthrough. | `test_source_tree_and_schema.py`, `test_tooling_pull_client.py`, `test_sf_cli_pull_client.py` |
+| Apex analysis | Tokenizer-based reference extraction: class graph, SOQL/DML targets, field reads and writes, callouts, named credentials, async targets, entry points, test-class detection, dynamic-access flag (C20). | `test_apex_analyzer.py`, `test_surfaces_data_mdapi.py` |
 | Flows | Every element and resource type; derived object / field / Apex / subflow / email references; Tooling JSON and XML accepted. | `test_flow_extractor.py` |
 | Formulas | Deterministic parser with `$` globals, `&` concat, 80+ functions; tolerant reference fallback. | `test_formula_parser.py`, `test_formula_references.py` |
 | Schema | Objects, fields, lookups, record types, picklists from source tree or describe (C21). | `test_source_tree_and_schema.py` |
 | Graph | Typed dependency graph, evidence channel + confidence per edge, Dependency-API cross-check (C22). | `test_tooling_pull_client.py`, `test_extract_e2e.py` |
-| Impact | Where-used, change closure, save impact in Order-of-Execution order, unused fields, legacy automation (C23). | `test_xray_e2e.py` |
+| Data profile | Record counts (`limits/recordCount`) and custom-field fill rates (one aggregate query per object) attached to graph nodes. | `test_surfaces_data_mdapi.py` |
+| Impact | Where-used with live / test / inactive split, change closure, save impact in Order-of-Execution order, unused fields with fill rate and "still referenced by", legacy automation (C23). | `test_impact_and_report.py`, `test_xray_e2e.py` |
 | Report | X-Ray HTML with a where-used explorer, save-impact tables, unused / legacy sections, D3 graph; JSON schema 2.0. | `scripts/verify_xray.py` |
 | Year two (kept) | OoE runtime, Tier 1/2/3 translators, Shadow Mode, Compare Mode, cutover orchestrator. | existing suites |
 
@@ -54,9 +55,12 @@ make smoke        # smoke (in-memory SF backend)
 uv run offramp extract --fixture tests/integration/fixtures/sample_org --out out/fx
 uv run offramp extract --source-dir ~/projects/acme-sfdx --out out/acme
 
-# Extract from a live org (SF_* env for JWT bearer auth; REST/Tooling by default)
+# Extract from a live org (SF_* env for JWT bearer auth). Default: REST/Tooling plus a
+# Metadata API retrieve for the types Tooling cannot read; no CLI needed on either side.
 uv run offramp extract --org acme_prod --out out/acme
-uv run offramp extract --org acme_prod --via sf-cli --out out/acme     # full Metadata API bodies
+uv run offramp extract --org acme_prod --via mdapi --out out/acme      # Metadata API for everything
+uv run offramp extract --org acme_prod --via sf-cli --out out/acme     # sf CLI retrieve
+uv run offramp extract --org acme_prod --no-data-profile --out out/acme  # skip record counts / fill rates
 
 # Ask the graph (answers from graph.json, no org round-trip)
 uv run offramp impact --from out/fx --where-used Lead.Country__c
@@ -181,9 +185,9 @@ uv run pytest -m load                  # benchmarks
 uv run pytest                          # everything
 ```
 
-### What the Tooling path can and cannot see
+### What each path can see
 
-The REST/Tooling path reads full bodies for Apex, Flows, validation rules, workflow rules and actions, custom fields, LWC, platform events, CDC channels, CMT rows, CronTriggers, and the data model. Approval processes and assignment / escalation / auto-response / sharing rules come back **partial** (name, object, active) because Salesforce does not expose their bodies through Tooling; the report flags them and `--via sf-cli` or `--source-dir` fills them in.
+The REST/Tooling path reads full bodies for Apex, Flows, validation rules, workflow rules and actions, custom fields, LWC, platform events, CDC channels, layouts, Lightning pages, permission sets and profiles, CMT rows, CronTriggers, the data model, and the data profile. Approval processes, assignment / escalation / auto-response / sharing rules, and reports beyond the newest 300 are not exposed in full through Tooling, so the default `--org` run also issues a Metadata API retrieve for exactly those types through simple-salesforce. `--via mdapi` retrieves everything that way; `--via sf-cli` uses the CLI. Any type that still comes back partial is flagged in the report.
 
 ## Deployment
 

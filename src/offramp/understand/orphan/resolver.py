@@ -108,7 +108,11 @@ def _called_apex_classes(components: list[Component], graph: DependencyGraph | N
                     DependencyKind.TRIGGERS,
                 }:
                     src = graph.node(str(e.source_id))
-                    if src is not None and src.category not in {"lwc_bundle", "CronTrigger"}:
+                    if (
+                        src is not None
+                        and src.category not in {"lwc_bundle", "CronTrigger"}
+                        and not src.meta.get("is_test")
+                    ):
                         referenced.add(c.api_name or c.name)
                         break
         return referenced

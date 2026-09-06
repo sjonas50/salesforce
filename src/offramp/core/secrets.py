@@ -1,9 +1,8 @@
 """Secret loading abstraction.
 
-Phase 0 ships a filesystem + env-var loader. Production implementations for
-Azure Key Vault and AWS Secrets Manager follow in Phase 5 (helm chart wiring).
-The :class:`SecretSource` Protocol fixes the contract so swapping backends does
-not require changes to caller code.
+Filesystem (Kubernetes secret mount) and env-var loaders. Azure Key Vault and
+AWS Secrets Manager backends plug in behind the same :class:`SecretSource`
+Protocol when the hosted service ships, without changes to caller code.
 """
 
 from __future__ import annotations

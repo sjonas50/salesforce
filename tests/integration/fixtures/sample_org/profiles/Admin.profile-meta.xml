@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+    <custom>false</custom>
+    <fieldPermissions><editable>true</editable><field>Opportunity.Legacy_Notes__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Opportunity.Discount__c</field><readable>true</readable></fieldPermissions>
+    <classAccesses><apexClass>MetadataTriggerHandler</apexClass><enabled>true</enabled></classAccesses>
+    <objectPermissions><allowRead>true</allowRead><allowEdit>true</allowEdit><object>Opportunity</object></objectPermissions>
+</Profile>

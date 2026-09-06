@@ -85,9 +85,17 @@ def emit(node: Node) -> str:
     if isinstance(node, NullLit):
         return "None"
     if isinstance(node, Ident):
+        if node.name.startswith("$"):
+            raise UnsupportedFormulaError(
+                f"global variable {node.name} needs org context; Tier 1 rules cannot resolve it"
+            )
         return f"_field(record, {node.name!r})"
     if isinstance(node, FieldRef):
         path = ".".join(node.parts)
+        if path.startswith("$"):
+            raise UnsupportedFormulaError(
+                f"global variable {path} needs org context; Tier 1 rules cannot resolve it"
+            )
         return f"_field(record, {path!r})"
     if isinstance(node, UnaryOp):
         operand = emit(node.operand)
@@ -97,6 +105,8 @@ def emit(node: Node) -> str:
             return f"(not ({operand}))"
         raise UnsupportedFormulaError(f"unsupported unary op {node.op}")
     if isinstance(node, BinaryOp):
+        if node.op == "&":
+            return f"_concat({emit(node.left)}, {emit(node.right)})"
         py_op = _BIN_OPS.get(node.op)
         if py_op is None:
             raise UnsupportedFormulaError(f"unsupported binary op {node.op}")
@@ -168,7 +178,7 @@ def emit_rule_body(formula: str, *, function_name: str) -> str:
         '"""Auto-generated formula rule. Do not edit by hand."""\n'
         "from __future__ import annotations\n\n"
         "from offramp.runtime.rules.formula_runtime import (\n"
-        "    _addmonths, _begins, _blankvalue, _ceil, _contains, _date,\n"
+        "    _addmonths, _begins, _blankvalue, _ceil, _concat, _contains, _date,\n"
         "    _field, _find, _floor, _ispickval, _isblank, _left, _lower,\n"
         "    _mid, _mod, _now, _right, _round, _substitute, _text, _today,\n"
         "    _trim, _upper, _value,\n"

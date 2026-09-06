@@ -134,6 +134,9 @@ def _component_rows(inputs: XRayInputs) -> list[dict[str, Any]]:
                 "domain": a.domain if a else "",
                 "partial": bool(c.raw.get("partial")) if isinstance(c.raw, dict) else False,
                 "legacy": c.category.value in _LEGACY_CATEGORIES,
+                "is_test": bool(n.meta.get("is_test")) if n else False,
+                "dynamic_access": list(n.meta.get("dynamic_access", [])) if n else [],
+                "surface": str(n.meta.get("surface", "")) if n else "",
             }
         )
     rows.sort(key=lambda r: (-r["inbound"] - r["outbound"], r["category"], r["name"].lower()))
@@ -187,7 +190,10 @@ def _where_used_index(g: DependencyGraph) -> list[dict[str, Any]]:
                 "object": n.object_name or "",
                 "custom": bool(n.meta.get("custom")),
                 "total": wu.total,
+                "active_total": wu.active_total,
+                "automation_total": wu.automation_total,
                 "api_only": wu.api_only_count,
+                "fill_rate": n.meta.get("fill_rate"),
                 "refs": [
                     {
                         "name": r.node.api_name,
@@ -197,6 +203,8 @@ def _where_used_index(g: DependencyGraph) -> list[dict[str, Any]]:
                         "confidence": r.confidence,
                         "api": r.corroborated_by_api,
                         "notes": r.notes or "",
+                        "active": r.active,
+                        "is_test": r.is_test,
                     }
                     for refs in wu.by_category.values()
                     for r in refs
@@ -278,11 +286,17 @@ def build_context(inputs: XRayInputs) -> dict[str, Any]:
                 "field": u.node.api_name,
                 "object": u.node.object_name or "",
                 "reason": u.reason,
-                "api_references": u.api_references,
+                "referenced_by": u.referenced_by,
                 "label": u.node.meta.get("label", ""),
+                "fill_rate": u.fill_rate,
+                "record_count": u.record_count,
+                "empty": u.empty,
             }
             for u in unused
         ],
+        "has_data_profile": any(
+            "fill_rate" in n.meta for n in g.nodes.values() if n.kind == "field"
+        ),
         "legacy": [
             {
                 "name": la.component.api_name,
@@ -349,13 +363,13 @@ def _default_save_objects(g: DependencyGraph) -> list[str]:
     return [o for o, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:8]]
 
 
-def render_html(inputs: XRayInputs) -> str:
+def render_html(inputs: XRayInputs, ctx: dict[str, Any] | None = None) -> str:
     env = _template_env()
-    return env.get_template("xray.html.j2").render(**build_context(inputs))
+    return env.get_template("xray.html.j2").render(**(ctx or build_context(inputs)))
 
 
-def render_json(inputs: XRayInputs) -> dict[str, Any]:
-    ctx = build_context(inputs)
+def render_json(inputs: XRayInputs, ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+    ctx = ctx or build_context(inputs)
     ann = {a.component_id: a for a in inputs.annotations}
     return {
         "schema_version": "2.0",
@@ -416,8 +430,10 @@ def _score_to_jsonable(score: ComplexityScore | None) -> dict[str, Any] | None:
 
 def write_xray(inputs: XRayInputs, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "xray.html").write_text(render_html(inputs), encoding="utf-8")
+    ctx = build_context(inputs)
+    (out_dir / "xray.html").write_text(render_html(inputs, ctx), encoding="utf-8")
     (out_dir / "xray.json").write_text(
-        json.dumps(render_json(inputs), indent=2, sort_keys=True, default=str), encoding="utf-8"
+        json.dumps(render_json(inputs, ctx), indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
     )
     log.info("understand.xray.written", out_dir=str(out_dir))

@@ -192,7 +192,7 @@ class Annotator:
         host = settings.base_url.lower()
         if "anthropic.com" not in host:
             raise NotImplementedError(
-                f"Only the Anthropic backend is implemented in Phase 2; got base_url={settings.base_url}. "
+                f"Only the Anthropic backend is implemented; got base_url={settings.base_url}. "
                 "Add an OpenAI-compatible backend if you need to swap providers."
             )
         backend = AnthropicBackend(

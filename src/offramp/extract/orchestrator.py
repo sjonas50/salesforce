@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from offramp.core.logging import get_logger
-from offramp.core.models import CategoryName, Component, Provenance, SchemaSnapshot
+from offramp.core.models import CategoryName, Component, DataProfile, Provenance, SchemaSnapshot
 from offramp.engram.client import EngramClient
 from offramp.extract import categories as _categories  # noqa: F401 — register extractors
 from offramp.extract.audit import CoverageReport, build_report
@@ -57,16 +57,21 @@ class ToolingSupplement:
     dependency_rows: list[dict[str, Any]] = field(default_factory=list)
     cron_rows: list[dict[str, Any]] = field(default_factory=list)
     schema: SchemaSnapshot | None = None
+    data_profile: DataProfile | None = None
 
     @classmethod
     def from_source_tree(cls, tree: SourceTree, *, org_alias: str) -> ToolingSupplement:
+        from offramp.extract.data_profile import profile_from_dump
+
         deps = tree.tooling_json("dependencies") or []
         cron = tree.tooling_json("cron_triggers") or []
+        dump = tree.tooling_json("data_profile")
         return cls(
             cmt_records=read_cmt_records_from_fixture(tree.root),
             dependency_rows=[r for r in deps if isinstance(r, dict)],
             cron_rows=[r for r in cron if isinstance(r, dict)],
             schema=from_source_tree(tree, org_alias=org_alias),
+            data_profile=profile_from_dump(dump, org_alias=org_alias) if dump else None,
         )
 
 
@@ -171,7 +176,10 @@ class ExtractOrchestrator:
             failures=failures,
             disagreements=recon.disagreements,
             unresolved_references=[],
-            suspected_gaps=_detect_suspected_gaps(attempted),
+            suspected_gaps=[
+                *_detect_suspected_gaps(attempted),
+                *(f"pull failure: {f}" for f in getattr(self.client, "failures", [])),
+            ],
         )
 
         log.info(
@@ -191,6 +199,7 @@ class ExtractOrchestrator:
             schema=self.supplement.schema,
             dependency_rows=list(self.supplement.dependency_rows),
             cron_rows=list(self.supplement.cron_rows),
+            data_profile=self.supplement.data_profile,
         )
 
 
@@ -213,6 +222,7 @@ class ExtractRunResult:
     schema: SchemaSnapshot | None = None
     dependency_rows: list[dict[str, Any]] = field(default_factory=list)
     cron_rows: list[dict[str, Any]] = field(default_factory=list)
+    data_profile: DataProfile | None = None
     _graph: DependencyGraph | None = field(default=None, repr=False)
 
     def build_graph(self) -> DependencyGraph:
@@ -225,6 +235,7 @@ class ExtractRunResult:
                 dispatch_edges=self.dispatch_edges,
                 api_rows=self.dependency_rows,
                 cron_rows=self.cron_rows,
+                data_profile=self.data_profile,
             )
         return self._graph
 
@@ -264,6 +275,10 @@ class ExtractRunResult:
         if self.schema is not None:
             (out_dir / "schema.json").write_text(
                 self.schema.model_dump_json(indent=2), encoding="utf-8"
+            )
+        if self.data_profile is not None:
+            (out_dir / "data_profile.json").write_text(
+                self.data_profile.model_dump_json(indent=2), encoding="utf-8"
             )
         graph = self.build_graph()
         (out_dir / "graph.json").write_text(

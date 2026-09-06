@@ -5,9 +5,10 @@ handler graph in CMT records (e.g. ``Trigger_Action__mdt`` rows). Static
 analysis of the trigger code returns a single dispatcher class; this reader
 recovers the full handler list by querying the CMT records themselves.
 
-Phase 1 ships against fixtures (CMT rows pre-loaded into a JSON file under
-``_tooling/cmt_records.json``). Real Tooling API integration lands once the
-:class:`offramp.extract.pull.tooling_api.ToolingApiPullClient` is wired up.
+Two sources feed the same :class:`CMTRecord` shape: a ``_tooling/cmt_records.json``
+dump on the directory path, and
+:meth:`offramp.extract.pull.tooling_api.ToolingApiPullClient.cmt_records` on the
+REST path.
 """
 
 from __future__ import annotations

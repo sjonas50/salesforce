@@ -1,6 +1,6 @@
 """Engram client.
 
-Phase 0 ships an in-memory + optional-HTTP stub so callers can integrate today
+Ships an in-memory client + an HTTP client so callers can integrate today
 and switch to the real backend without code changes once Engram E1/E2 are
 available (weeks 6 and 12 of the v2.1 plan).
 

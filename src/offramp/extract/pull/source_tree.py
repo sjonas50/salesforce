@@ -48,6 +48,11 @@ _KNOWN_DIRS = (
     "escalationRules",
     "sharingRules",
     "lwc",
+    "layouts",
+    "flexipages",
+    "permissionsets",
+    "profiles",
+    "reports",
 )
 
 # Glob → CategoryName. Interpretation is the per-category extractor's job;
@@ -74,6 +79,11 @@ CATEGORY_GLOBS: dict[CategoryName, list[str]] = {
     CategoryName.PLATFORM_EVENT: ["objects/*__e/*.object-meta.xml"],
     CategoryName.CHANGE_DATA_CAPTURE: ["_tooling/cdc_subscriptions.json"],
     CategoryName.LWC_BUNDLE: ["lwc/*/"],
+    CategoryName.PAGE_LAYOUT: ["layouts/*.layout-meta.xml"],
+    CategoryName.FLEXIPAGE: ["flexipages/*.flexipage-meta.xml"],
+    CategoryName.PERMISSION_SET: ["permissionsets/*.permissionset-meta.xml"],
+    CategoryName.PROFILE: ["profiles/*.profile-meta.xml"],
+    CategoryName.REPORT: ["reports/**/*.report-meta.xml"],
 }
 
 # Flow variants and field kinds share globs; try the most specific first.
@@ -127,6 +137,7 @@ class SourceTree:
     def __init__(self, root: Path) -> None:
         self.given_root = root
         self.root = locate_source_root(root)
+        self._text_cache: dict[str, str] = {}
 
     # ---- automation categories ------------------------------------------------
 
@@ -189,13 +200,24 @@ class SourceTree:
             else:
                 payload = self._file_payload(path)
                 api_name = derive_api_name(path)
+                if cat is CategoryName.REPORT:
+                    # Reports are addressed as Folder/Name.
+                    rel = Path(self._rel(path))
+                    api_name = str(rel.relative_to("reports").with_name(api_name))
             if not _matches_category(cat, payload):
                 continue
             seen_names.add(api_name)
             yield path, payload, api_name
 
+    def _read(self, path: Path) -> str:
+        """File text, cached: Flow files are matched by seven category globs."""
+        key = str(path)
+        if key not in self._text_cache:
+            self._text_cache[key] = path.read_text(encoding="utf-8")
+        return self._text_cache[key]
+
     def _file_payload(self, path: Path) -> dict[str, Any]:
-        text = path.read_text(encoding="utf-8")
+        text = self._read(path)
         payload: dict[str, Any] = {"path": self._rel(path)}
         if path.suffix == ".json":
             payload["raw_json"] = text

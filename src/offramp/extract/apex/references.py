@@ -9,6 +9,7 @@ coverage report rather than a bad edge.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 
 from offramp.extract.apex.model import ApexAnalysis, AsyncRef, DmlRef, SoqlRef
 from offramp.extract.apex.tokenizer import Kind, Tok, tokenize
@@ -442,8 +443,8 @@ def analyze(source: str, *, name_hint: str | None = None) -> ApexAnalysis:
     a.tokens = len(toks)
 
     _header(toks, a)
-    decls = _declarations(toks)
-    _scan(toks, a, decls)
+    decls, collections = _declarations(toks)
+    _scan(toks, a, decls, collections)
     _derive_entry_points(a)
     _finalize(a)
     return a
@@ -570,26 +571,27 @@ def _skip_generic(toks: list[Tok], i: int) -> int:
 # ---- declarations -----------------------------------------------------------
 
 
-def _declarations(toks: list[Tok]) -> dict[str, str]:
+def _declarations(toks: list[Tok]) -> tuple[dict[str, str], set[str]]:
     """Map local/field variable names to declared types (``Lead l`` → l: Lead).
 
     Generic collections resolve to their element type: ``List<Lead> leads`` →
-    leads: Lead; ``Map<Id, Account> m`` → m: Account.
+    leads: Lead; ``Map<Id, Account> m`` → m: Account. The second value names
+    the variables that are collections, so ``m.get(key)`` is never mistaken for
+    ``sObject.get('Field')``.
     """
     decls: dict[str, str] = {}
+    collections: set[str] = set()
     n = len(toks)
     i = 0
     while i < n - 2:
         t = toks[i]
-        if t.kind is Kind.IDENT and t.lower() not in _KEYWORDS - {
-            "list",
-            "map",
-            "set",
-            "id",
-            "string",
-        }:
+        if t.kind is Kind.IDENT and (
+            t.lower() not in _KEYWORDS - {"list", "map", "set", "id", "string"}
+            or is_sobject_name(t.text)
+        ):
             j = i
             type_name = t.text
+            is_collection = False
             # Dotted type (Approval.ProcessSubmitRequest, Database.QueryLocator): keep the namespace
             # so platform types are filtered out downstream.
             if i >= 2 and toks[i - 1].text == "." and toks[i - 2].kind is Kind.IDENT:
@@ -599,12 +601,13 @@ def _declarations(toks: list[Tok]) -> dict[str, str]:
                 close = _skip_generic(toks, j + 1)
                 inner = [x.text for x in toks[j + 2 : close] if x.kind is Kind.IDENT]
                 # last identifier inside <...> is the element type
-                elem = inner[-1] if inner else type_name
-                type_name = elem
+                type_name = inner[-1] if inner else type_name
+                is_collection = True
                 j = close
             # array form Lead[]
             if j + 2 < n and toks[j + 1].text == "[" and toks[j + 2].text == "]":
                 j += 2
+                is_collection = True
             if (
                 j + 2 < n
                 and toks[j + 1].kind is Kind.IDENT
@@ -617,40 +620,65 @@ def _declarations(toks: list[Tok]) -> dict[str, str]:
                     "throw",
                 }:
                     decls[var.lower()] = type_name
+                    if is_collection:
+                        collections.add(var.lower())
                 i = j + 2
                 continue
         i += 1
-    return decls
+    return decls, collections
 
 
 # ---- main scan --------------------------------------------------------------
 
 
-def _scan(toks: list[Tok], a: ApexAnalysis, decls: dict[str, str]) -> None:
-    n = len(toks)
-    class_refs: set[str] = set()
-    method_calls: set[str] = set()
-    sobjects: set[str] = set()
-    fields: set[str] = set()
-    field_writes: set[str] = set()
-    callouts: set[str] = set()
-    named_creds: set[str] = set()
-    labels: set[str] = set()
-    settings: set[str] = set()
-    forname: set[str] = set()
-    annotations: list[str] = []
-    depth = 0
+@dataclass
+class _Refs:
+    """Accumulators for one scan; folded into the ApexAnalysis at the end."""
 
-    # sObject-typed variables from declarations
+    class_refs: set[str] = field(default_factory=set)
+    method_calls: set[str] = field(default_factory=set)
+    sobjects: set[str] = field(default_factory=set)
+    fields: set[str] = field(default_factory=set)
+    field_writes: set[str] = field(default_factory=set)
+    callouts: set[str] = field(default_factory=set)
+    named_creds: set[str] = field(default_factory=set)
+    labels: set[str] = field(default_factory=set)
+    settings: set[str] = field(default_factory=set)
+    forname: set[str] = field(default_factory=set)
+    dynamic: set[str] = field(default_factory=set)
+    annotations: list[str] = field(default_factory=list)
+    collections: set[str] = field(default_factory=set)  # variables declared as List/Map/Set/array
+
+
+# Constructs whose targets cannot be resolved statically. Each lowers the
+# confidence of the class's parser edges and is surfaced in the report.
+_DYNAMIC_PATTERNS = {
+    "dynamic_soql": "Database.query / getQueryLocator with a non-literal query string",
+    "dynamic_type": "Type.forName with a non-literal class name",
+    "dynamic_field": "sObject.get / put with a non-literal field name",
+    "global_describe": "Schema.getGlobalDescribe / describeSObjects",
+    "dynamic_sobject": "SObjectType.newSObject / dynamic instantiation",
+}
+_METHOD_HEAD_EXCLUDE = {"new", "return", "else", "if", "for", "while", "switch", "catch"}
+_SETTING_ACCESSORS = {"getinstance", "getvalues", "getall", "getorgdefaults"}
+_DYNAMIC_QUERY = {"query", "querywithbinds", "getquerylocator", "countquery"}
+
+
+def _scan(
+    toks: list[Tok], a: ApexAnalysis, decls: dict[str, str], collections: set[str] | None = None
+) -> None:
+    """One pass over the token stream; each construct has its own handler."""
+    r = _Refs()
+    r.collections = collections or set()
     for typ in decls.values():
         if is_sobject_name(typ):
-            sobjects.add(typ)
+            r.sobjects.add(typ)
 
+    n = len(toks)
+    depth = 0
     i = 0
     while i < n:
         t = toks[i]
-        low = t.lower()
-
         if t.text == "{":
             depth += 1
         elif t.text == "}":
@@ -659,272 +687,285 @@ def _scan(toks: list[Tok], a: ApexAnalysis, decls: dict[str, str]) -> None:
             a.branches += 1
 
         if t.kind is Kind.ANNOTATION:
-            annotations.append(t.text[1:])
-            i += 1
-            continue
-
-        if t.kind is Kind.SOQL:
+            r.annotations.append(t.text[1:])
+        elif t.kind is Kind.SOQL:
             a.soql.append(_parse_soql(t.text))
-            i += 1
-            continue
-
-        if t.kind is Kind.STRING:
+        elif t.kind is Kind.STRING:
             lit = t.text[1:-1]
             if lit.lower().startswith("callout:"):
-                named_creds.add(lit.split(":", 1)[1].split("/", 1)[0])
-            i += 1
+                r.named_creds.add(lit.split(":", 1)[1].split("/", 1)[0])
+        elif t.kind is Kind.IDENT:
+            i = _scan_ident(toks, i, a, decls, r, depth)
             continue
-
-        if t.kind is Kind.IDENT:
-            # Nested type declarations
-            if (
-                low in {"class", "interface", "enum"}
-                and depth >= 1
-                and i + 1 < n
-                and toks[i + 1].kind is Kind.IDENT
-            ):
-                a.inner_types.append(toks[i + 1].text)
-
-            # Branch counting / method counting
-            if low in _BRANCH_KEYWORDS:
-                a.branches += 1
-
-            # DML statements: insert x; upsert x Field__c; delete [SELECT...]
-            if (
-                low in _DML_OPS
-                and i + 1 < n
-                and toks[i + 1].kind in {Kind.IDENT, Kind.SOQL}
-                and i > 0
-                and toks[i - 1].text != "."
-            ):
-                target_tok = toks[i + 1]
-                if target_tok.kind is Kind.SOQL:
-                    q = _parse_soql(target_tok.text)
-                    a.dml.append(DmlRef(op=low, target="[SOQL]", sobject=q.sobject))
-                elif target_tok.lower() != "new":
-                    var = target_tok.text
-                    a.dml.append(DmlRef(op=low, target=var, sobject=_resolve_type(var, decls)))
-                else:
-                    # insert new Lead(...)
-                    if i + 2 < n:
-                        a.dml.append(DmlRef(op=low, target="new", sobject=toks[i + 2].text))
-                i += 1
-                continue
-
-            # Qualified access: A.b
-            if i + 2 < n and toks[i + 1].text == "." and toks[i + 2].kind is Kind.IDENT:
-                head = t.text
-                member = toks[i + 2].text
-                headl = head.lower()
-                memberl = member.lower()
-                is_call = i + 3 < n and toks[i + 3].text == "("
-                prev_is_dot = i > 0 and toks[i - 1].text == "."
-
-                if not prev_is_dot:
-                    # Database.insert(...) etc.
-                    if headl == "database" and memberl in _DATABASE_DML and is_call:
-                        var = toks[i + 4].text if i + 4 < n else ""
-                        a.dml.append(
-                            DmlRef(
-                                op=_DATABASE_DML[memberl],
-                                target=var,
-                                sobject=_resolve_type(var, decls),
-                                via_database_class=True,
-                            )
-                        )
-                    elif (
-                        headl == "database"
-                        and memberl in {"query", "querywithbinds", "getquerylocator", "countquery"}
-                        and is_call
-                    ):
-                        lit = (
-                            toks[i + 4].text
-                            if i + 4 < n and toks[i + 4].kind is Kind.STRING
-                            else ""
-                        )
-                        q = (
-                            _parse_soql(lit[1:-1].replace("\\'", "'"))
-                            if lit
-                            else SoqlRef(sobject="", dynamic=True)
-                        )
-                        q.dynamic = True
-                        a.soql.append(q)
-                    elif (headl, memberl) in _ASYNC and is_call:
-                        a.async_calls.append(
-                            AsyncRef(
-                                mechanism=_ASYNC[(headl, memberl)],
-                                target_class=_find_new(toks, i + 3),
-                            )
-                        )
-                    elif headl == "type" and memberl == "forname" and is_call:
-                        lit = (
-                            toks[i + 4].text
-                            if i + 4 < n and toks[i + 4].kind is Kind.STRING
-                            else ""
-                        )
-                        if lit:
-                            forname.add(lit[1:-1])
-                    elif headl == "label":
-                        labels.add(member)
-                    elif (
-                        headl == "schema"
-                        and memberl == "sobjecttype"
-                        and i + 4 < n
-                        and toks[i + 3].text == "."
-                    ):
-                        sobjects.add(toks[i + 4].text)
-                    elif (
-                        headl == "trigger" and memberl in {"new", "old", "newmap", "oldmap"}
-                    ) or headl in _SYSTEM_NAMESPACES:
-                        pass
-                    elif is_sobject_name(head):
-                        # Lead.Email (SObjectField) or Custom_Setting__c.getInstance()
-                        if memberl in {"getinstance", "getvalues", "getall", "getorgdefaults"}:
-                            settings.add(head)
-                        elif memberl == "sobjecttype":
-                            sobjects.add(head)
-                        elif (not is_call and not member[0].islower()) or not is_call:
-                            sobjects.add(head)
-                            fields.add(f"{head}.{member}")
-                    elif headl in decls:
-                        typ = decls[headl]
-                        if is_sobject_name(typ) and not is_call:
-                            fields.add(f"{typ}.{member}")
-                            if i + 3 < n and toks[i + 3].text == "=":
-                                field_writes.add(f"{typ}.{member}")
-                        elif (
-                            not is_sobject_name(typ)
-                            and typ[0].isupper()
-                            and typ.lower() not in _KEYWORDS
-                            and typ.lower() not in _SYSTEM_NAMESPACES
-                            and typ.lower() not in _CALLOUT_TYPES
-                        ):
-                            class_refs.add(typ)
-                            if is_call:
-                                method_calls.add(f"{typ}.{member}")
-                    elif head[0].isupper() and headl not in _KEYWORDS:
-                        # Static call / constant on another class
-                        class_refs.add(head)
-                        if is_call:
-                            method_calls.add(f"{head}.{member}")
-                        elif memberl == "class":
-                            pass
-                i += 1
-                continue
-
-            # new X(
-            if low == "new" and i + 1 < n and toks[i + 1].kind is Kind.IDENT:
-                typ = toks[i + 1].text
-                if is_sobject_name(typ):
-                    sobjects.add(typ)
-                    # new Lead(Id = x, OwnerId = y): named-argument constructor writes fields.
-                    if i + 2 < n and toks[i + 2].text == "(":
-                        j = i + 3
-                        depth_p = 1
-                        while j < n and depth_p > 0:
-                            if toks[j].text == "(":
-                                depth_p += 1
-                            elif toks[j].text == ")":
-                                depth_p -= 1
-                            elif (
-                                toks[j].kind is Kind.IDENT
-                                and j + 1 < n
-                                and toks[j + 1].text == "="
-                                and depth_p == 1
-                            ):
-                                fields.add(f"{typ}.{toks[j].text}")
-                                field_writes.add(f"{typ}.{toks[j].text}")
-                            j += 1
-                elif typ.lower() in _CALLOUT_TYPES:
-                    callouts.add(typ)
-                elif (
-                    typ.lower() not in _KEYWORDS
-                    and typ.lower() not in _SYSTEM_NAMESPACES
-                    and typ[0].isupper()
-                ):
-                    class_refs.add(typ)
-                i += 2
-                continue
-
-            # Bare type usages: declarations already handled; also `Lead` appearing as a type.
-            # A token right after '.' is a member name, never a type.
-            prev_dot = i > 0 and toks[i - 1].text == "."
-            if prev_dot:
-                pass
-            elif low in _CALLOUT_TYPES and t.text[0].isupper():
-                callouts.add(t.text)
-            elif is_sobject_name(t.text) and low not in _KEYWORDS and low not in decls:
-                sobjects.add(t.text)
-            elif (
-                t.text[0].isupper()
-                and low not in _KEYWORDS
-                and low not in _SYSTEM_NAMESPACES
-                and low not in decls
-                # Possible class reference used as a type (e.g. `TriggerAction handler`).
-                and i + 1 < n
-                and (toks[i + 1].kind is Kind.IDENT or toks[i + 1].text in {"<", ">", ",", ")"})
-            ):
-                class_refs.add(t.text)
-
-            # Method definitions: <ret> <name> ( ... ) {   (approximate)
-            if (
-                i + 1 < n
-                and toks[i + 1].text == "("
-                and i > 0
-                and toks[i - 1].kind is Kind.IDENT
-                and toks[i - 1].lower()
-                not in {"new", "return", "else", "if", "for", "while", "switch", "catch"}
-                and depth == 1
-            ):
-                a.methods += 1
-
         i += 1
 
-    # Interfaces resolved as class refs too (so the graph links to the interface class if it exists)
+    _fold(a, r)
+
+
+def _scan_ident(
+    toks: list[Tok], i: int, a: ApexAnalysis, decls: dict[str, str], r: _Refs, depth: int
+) -> int:
+    """Handle one identifier token; return the index to resume from."""
+    n = len(toks)
+    t = toks[i]
+    low = t.lower()
+
+    if (
+        low in {"class", "interface", "enum"}
+        and depth >= 1
+        and i + 1 < n
+        and toks[i + 1].kind is Kind.IDENT
+    ):
+        a.inner_types.append(toks[i + 1].text)
+    if low in _BRANCH_KEYWORDS:
+        a.branches += 1
+
+    if _is_dml_statement(toks, i):
+        _handle_dml(toks, i, a, decls)
+        return i + 2
+    if i + 2 < n and toks[i + 1].text == "." and toks[i + 2].kind is Kind.IDENT:
+        _handle_qualified(toks, i, a, decls, r)
+        return i + 2
+    if low == "new" and i + 1 < n and toks[i + 1].kind is Kind.IDENT:
+        _handle_new(toks, i, r)
+        return i + 2
+
+    _handle_bare(toks, i, decls, r)
+    if _is_method_definition(toks, i, depth):
+        a.methods += 1
+    return i + 1
+
+
+def _is_dml_statement(toks: list[Tok], i: int) -> bool:
+    return (
+        toks[i].lower() in _DML_OPS
+        and i + 1 < len(toks)
+        and toks[i + 1].kind in {Kind.IDENT, Kind.SOQL}
+        and i > 0
+        and toks[i - 1].text != "."
+    )
+
+
+def _handle_dml(toks: list[Tok], i: int, a: ApexAnalysis, decls: dict[str, str]) -> None:
+    """``insert x;`` / ``delete [SELECT ...];`` / ``insert new Lead(...)``."""
+    op = toks[i].lower()
+    target = toks[i + 1]
+    if target.kind is Kind.SOQL:
+        a.dml.append(DmlRef(op=op, target="[SOQL]", sobject=_parse_soql(target.text).sobject))
+    elif target.lower() != "new":
+        a.dml.append(DmlRef(op=op, target=target.text, sobject=_resolve_type(target.text, decls)))
+    elif i + 2 < len(toks):
+        a.dml.append(DmlRef(op=op, target="new", sobject=toks[i + 2].text))
+
+
+def _string_arg(toks: list[Tok], i: int) -> str:
+    """The first argument of a call when it is a string literal, unquoted; else ''."""
+    if i < len(toks) and toks[i].kind is Kind.STRING:
+        return toks[i].text[1:-1]
+    return ""
+
+
+def _handle_qualified(
+    toks: list[Tok], i: int, a: ApexAnalysis, decls: dict[str, str], r: _Refs
+) -> None:
+    """``Head.member`` access: platform calls, sObject fields, class statics."""
+    n = len(toks)
+    if i > 0 and toks[i - 1].text == ".":
+        return  # middle of a longer chain; the head was handled already
+    head, member = toks[i].text, toks[i + 2].text
+    headl, memberl = head.lower(), member.lower()
+    is_call = i + 3 < n and toks[i + 3].text == "("
+
+    if headl == "database" and memberl in _DATABASE_DML and is_call:
+        var = toks[i + 4].text if i + 4 < n else ""
+        a.dml.append(
+            DmlRef(
+                op=_DATABASE_DML[memberl],
+                target=var,
+                sobject=_resolve_type(var, decls),
+                via_database_class=True,
+            )
+        )
+    elif headl == "database" and memberl in _DYNAMIC_QUERY and is_call:
+        lit = _string_arg(toks, i + 4)
+        q = _parse_soql(lit.replace("\\'", "'")) if lit else SoqlRef(sobject="", dynamic=True)
+        q.dynamic = True
+        a.soql.append(q)
+        if not lit or (i + 5 < n and toks[i + 5].text == "+"):
+            r.dynamic.add("dynamic_soql")
+    elif (headl, memberl) in _ASYNC and is_call:
+        a.async_calls.append(
+            AsyncRef(mechanism=_ASYNC[(headl, memberl)], target_class=_find_new(toks, i + 3))
+        )
+    elif headl == "type" and memberl == "forname" and is_call:
+        lit = _string_arg(toks, i + 4)
+        if lit:
+            r.forname.add(lit)
+        else:
+            r.dynamic.add("dynamic_type")
+    elif headl == "label":
+        r.labels.add(member)
+    elif headl == "schema" and memberl == "sobjecttype" and i + 4 < n and toks[i + 3].text == ".":
+        r.sobjects.add(toks[i + 4].text)
+    elif headl == "schema" and memberl in {"getglobaldescribe", "describesobjects"}:
+        r.dynamic.add("global_describe")
+    elif headl == "trigger" or headl in _SYSTEM_NAMESPACES:
+        return
+    elif is_sobject_name(head):
+        # Lead.Email (SObjectField) or Custom_Setting__c.getInstance()
+        if memberl in _SETTING_ACCESSORS:
+            r.settings.add(head)
+        elif memberl == "sobjecttype":
+            r.sobjects.add(head)
+        elif not is_call:
+            r.sobjects.add(head)
+            r.fields.add(f"{head}.{member}")
+    elif headl in decls:
+        typ = decls[headl]
+        if is_sobject_name(typ):
+            if is_call and memberl in {"get", "put"} and headl not in r.collections:
+                # so.get('Field__c') is a resolvable reference; so.get(name) is not.
+                lit = _string_arg(toks, i + 4)
+                if lit:
+                    r.fields.add(f"{typ}.{lit}")
+                    if memberl == "put":
+                        r.field_writes.add(f"{typ}.{lit}")
+                else:
+                    r.dynamic.add("dynamic_field")
+            elif is_call and memberl == "newsobject":
+                r.dynamic.add("dynamic_sobject")
+            elif not is_call:
+                r.fields.add(f"{typ}.{member}")
+                if i + 3 < n and toks[i + 3].text == "=":
+                    r.field_writes.add(f"{typ}.{member}")
+        elif _is_org_type(typ):
+            r.class_refs.add(typ)
+            if is_call:
+                r.method_calls.add(f"{typ}.{member}")
+    elif head[0].isupper() and headl not in _KEYWORDS:
+        # Static call / constant on another class
+        r.class_refs.add(head)
+        if is_call:
+            r.method_calls.add(f"{head}.{member}")
+
+
+def _is_org_type(typ: str) -> bool:
+    low = typ.lower()
+    return (
+        typ[0].isupper()
+        and low not in _KEYWORDS
+        and low not in _SYSTEM_NAMESPACES
+        and low not in _CALLOUT_TYPES
+    )
+
+
+def _handle_new(toks: list[Tok], i: int, r: _Refs) -> None:
+    """``new X(...)``: sObject constructors (with named-argument writes), callouts, classes."""
+    n = len(toks)
+    typ = toks[i + 1].text
+    if is_sobject_name(typ):
+        r.sobjects.add(typ)
+        if i + 2 < n and toks[i + 2].text == "(":
+            for fname in _named_constructor_args(toks, i + 3):
+                r.fields.add(f"{typ}.{fname}")
+                r.field_writes.add(f"{typ}.{fname}")
+    elif typ.lower() in _CALLOUT_TYPES:
+        r.callouts.add(typ)
+    elif _is_org_type(typ):
+        r.class_refs.add(typ)
+
+
+def _named_constructor_args(toks: list[Tok], j: int) -> list[str]:
+    """Field names in ``new Lead(Id = x, OwnerId = y)`` starting after the '('."""
+    out: list[str] = []
+    depth = 1
+    n = len(toks)
+    while j < n and depth > 0:
+        text = toks[j].text
+        if text == "(":
+            depth += 1
+        elif text == ")":
+            depth -= 1
+        elif toks[j].kind is Kind.IDENT and depth == 1 and j + 1 < n and toks[j + 1].text == "=":
+            out.append(text)
+        j += 1
+    return out
+
+
+def _handle_bare(toks: list[Tok], i: int, decls: dict[str, str], r: _Refs) -> None:
+    """A lone identifier: a type in a declaration, cast, or generic argument."""
+    if i > 0 and toks[i - 1].text == ".":
+        return  # member name, never a type
+    t = toks[i]
+    low = t.lower()
+    n = len(toks)
+    if low in _CALLOUT_TYPES and t.text[0].isupper():
+        r.callouts.add(t.text)
+    elif is_sobject_name(t.text) and low not in _KEYWORDS and low not in decls:
+        r.sobjects.add(t.text)
+    elif (
+        _is_org_type(t.text)
+        and low not in decls
+        and i + 1 < n
+        and (toks[i + 1].kind is Kind.IDENT or toks[i + 1].text in {"<", ">", ",", ")"})
+    ):
+        r.class_refs.add(t.text)
+
+
+def _is_method_definition(toks: list[Tok], i: int, depth: int) -> bool:
+    """``<ret> <name> (`` at class-body depth (approximate)."""
+    return (
+        depth == 1
+        and i > 0
+        and i + 1 < len(toks)
+        and toks[i + 1].text == "("
+        and toks[i - 1].kind is Kind.IDENT
+        and toks[i - 1].lower() not in _METHOD_HEAD_EXCLUDE
+    )
+
+
+def _fold(a: ApexAnalysis, r: _Refs) -> None:
+    """Merge accumulators into the analysis, drop platform noise, sort for determinism."""
     for name in [a.extends, *a.implements]:
         if name:
-            class_refs.add(name.split("<", 1)[0])
-
-    # Trigger context sobject
+            r.class_refs.add(name.split("<", 1)[0])
     if a.trigger_object:
-        sobjects.add(a.trigger_object)
+        r.sobjects.add(a.trigger_object)
 
     # Platform types are not org classes (framework interfaces like TriggerAction are).
     class_refs = {
         c
-        for c in class_refs
+        for c in r.class_refs
         if c.split(".", 1)[0].lower() not in _SYSTEM_NAMESPACES
         and c.lower() not in _PLATFORM_INTERFACES
         and c.lower() not in _CALLOUT_TYPES
         and not is_sobject_name(c)
     }
-    # Don't self-reference
     class_refs.discard(a.name)
     for inner in a.inner_types:
         class_refs.discard(inner)
 
-    a.annotations.extend(x for x in annotations if x not in a.annotations)
-    a.class_references = sorted(class_refs, key=str.lower)
-    a.method_calls = sorted(method_calls, key=str.lower)
     for q in a.soql:
         if q.sobject:
-            sobjects.add(q.sobject)
+            r.sobjects.add(q.sobject)
             for f in q.fields + q.where_fields:
-                if "." not in f:
-                    fields.add(f"{q.sobject}.{f}")
-                else:
-                    fields.add(f"{q.sobject}.{f}")
+                r.fields.add(f"{q.sobject}.{f}")
     for d in a.dml:
         if d.sobject:
-            sobjects.add(d.sobject)
-    a.sobject_references = sorted(sobjects, key=str.lower)
-    a.field_references = sorted(fields, key=str.lower)
-    a.field_writes = sorted(field_writes, key=str.lower)
-    a.callouts = sorted(callouts, key=str.lower)
-    a.named_credentials = sorted(named_creds)
-    a.custom_labels = sorted(labels)
-    a.custom_settings = sorted(settings)
-    a.type_forname_literals = sorted(forname)
+            r.sobjects.add(d.sobject)
+
+    a.annotations.extend(x for x in r.annotations if x not in a.annotations)
+    a.class_references = sorted(class_refs, key=str.lower)
+    a.method_calls = sorted(r.method_calls, key=str.lower)
+    a.sobject_references = sorted(r.sobjects, key=str.lower)
+    a.field_references = sorted(r.fields, key=str.lower)
+    a.field_writes = sorted(r.field_writes, key=str.lower)
+    a.callouts = sorted(r.callouts, key=str.lower)
+    a.named_credentials = sorted(r.named_creds)
+    a.custom_labels = sorted(r.labels)
+    a.custom_settings = sorted(r.settings)
+    a.type_forname_literals = sorted(r.forname)
+    a.dynamic_access = sorted(r.dynamic)
 
 
 def _resolve_type(var: str, decls: dict[str, str]) -> str | None:

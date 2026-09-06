@@ -11,11 +11,15 @@ What it can and cannot see:
   fields (formulas, roll-ups), LWC bundles, platform events, CDC channel
   members, CMT rows, CronTriggers, ``MetadataComponentDependency`` rows,
   the data model via ``describe``.
+* **Full via REST too**: page layouts and Lightning pages (Tooling
+  ``Metadata``), permission sets and profiles (composed from
+  ``FieldPermissions`` / ``ObjectPermissions`` / ``SetupEntityAccess``).
 * **Partial**: approval processes (``ProcessDefinition`` exposes name,
   object, and state only), assignment / escalation / auto-response / sharing
-  rules (name, object, active). Their bodies need the Metadata API — use the
-  sf CLI path or a customer-supplied SFDX project for those. Partial records
-  carry ``payload['partial'] = True`` and the coverage report says so.
+  rules (name, object, active), reports beyond the newest 300. The CLI
+  fills those from the Metadata API (:mod:`offramp.extract.pull.mdapi`)
+  automatically; partial records carry ``payload['partial'] = True`` and
+  the coverage report says so.
 """
 
 from __future__ import annotations
@@ -115,6 +119,7 @@ class ToolingApiPullClient:
         self.api_version = api_version
         self.source_version = f"tooling-{api_version}"
         self.stats = ToolingPullStats()
+        self._object_names: dict[str, str] | None = None
 
     # ---- PullClient ------------------------------------------------------------
 
@@ -155,6 +160,14 @@ class ToolingApiPullClient:
                 out.extend(await self._partial_rules(cat, obj))
         if CategoryName.SHARING_RULE in wanted:
             out.extend(await self._sharing_rules())
+        if CategoryName.PAGE_LAYOUT in wanted:
+            out.extend(await self._layouts())
+        if CategoryName.FLEXIPAGE in wanted:
+            out.extend(await self._flexipages())
+        if wanted & {CategoryName.PERMISSION_SET, CategoryName.PROFILE}:
+            out.extend([r for r in await self._permissions() if r.category in wanted])
+        if CategoryName.REPORT in wanted:
+            out.extend(await self._reports())
         self.stats.records = len(out)
         log.info(
             "extract.tooling.pulled",
@@ -220,11 +233,14 @@ class ToolingApiPullClient:
         return out
 
     async def cron_rows(self) -> list[dict[str, Any]]:
-        crons = await self._tq(
-            "SELECT Id, CronJobDetail.Name, CronJobDetail.JobType, CronExpression, State, NextFireTime FROM CronTrigger WHERE State IN ('WAITING', 'ACQUIRED', 'EXECUTING')"
+        """CronTrigger + AsyncApexJob are standard REST objects, not Tooling objects."""
+        crons = await self._q(
+            "SELECT Id, CronJobDetail.Name, CronJobDetail.JobType, CronExpression, State, NextFireTime "
+            "FROM CronTrigger WHERE State IN ('WAITING', 'ACQUIRED', 'EXECUTING')"
         )
-        jobs = await self._tq(
-            "SELECT CronTriggerId, ApexClass.Name FROM AsyncApexJob WHERE JobType = 'ScheduledApex' AND Status IN ('Queued', 'Preparing', 'Processing', 'Holding')"
+        jobs = await self._q(
+            "SELECT CronTriggerId, ApexClass.Name FROM AsyncApexJob "
+            "WHERE JobType = 'ScheduledApex' AND Status IN ('Queued', 'Preparing', 'Processing', 'Holding')"
         )
         cls_by_cron = {
             str(j.get("CronTriggerId")): (j.get("ApexClass") or {}).get("Name") for j in jobs
@@ -262,6 +278,37 @@ class ToolingApiPullClient:
         )
 
     # ---- per-category pulls ----------------------------------------------------
+
+    async def _custom_object_names(self) -> dict[str, str]:
+        """``TableEnumOrId`` holds a CustomObject Id (01I...) for custom objects; map it back."""
+        if self._object_names is None:
+            names: dict[str, str] = {}
+            for r in await self._tq("SELECT Id, DeveloperName, NamespacePrefix FROM CustomObject"):
+                ns = r.get("NamespacePrefix")
+                dev = str(r.get("DeveloperName", ""))
+                if dev:
+                    names[str(r.get("Id"))] = f"{ns}__{dev}__c" if ns else f"{dev}__c"
+            self._object_names = names
+        return self._object_names
+
+    async def _object_name(self, table: Any) -> str:
+        t = str(table or "")
+        if t.startswith("01I"):
+            return (await self._custom_object_names()).get(t, t)
+        return t
+
+    async def _with_metadata(self, sobject: str, id_fields: str) -> list[dict[str, Any]]:
+        """Tooling ``Metadata`` is only queryable for a single record: list ids, then fetch each."""
+        rows = await self._tq(f"SELECT {id_fields} FROM {sobject}")
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            rid = r.get("Id")
+            if not rid:
+                continue
+            detail = await self._tq(f"SELECT Id, Metadata FROM {sobject} WHERE Id = '{rid}'")
+            meta = detail[0].get("Metadata") if detail else None
+            out.append({**r, "Metadata": meta if isinstance(meta, dict) else {}})
+        return out
 
     async def _tq(self, soql: str) -> list[dict[str, Any]]:
         self.stats.queries += 1
@@ -316,7 +363,7 @@ class ToolingApiPullClient:
 
     async def _apex_triggers(self) -> list[RawMetadataRecord]:
         rows = await self._tq(
-            "SELECT Id, Name, NamespacePrefix, ApiVersion, Status, Body, TableEnumOrId, UsageBeforeInsert, UsageAfterInsert, UsageBeforeUpdate, UsageAfterUpdate, UsageBeforeDelete, UsageAfterDelete, UsageAfterUndelete FROM ApexTrigger"
+            "SELECT Id, Name, NamespacePrefix, ApiVersion, Status, Body, TableEnumOrId FROM ApexTrigger"
         )
         out = []
         for r in rows:
@@ -336,7 +383,7 @@ class ToolingApiPullClient:
                         },
                         "trigger_body": body if body != "(hidden)" else "",
                         "managed_hidden": body == "(hidden)",
-                        "object_from_path": str(r.get("TableEnumOrId", "")),
+                        "object_from_path": await self._object_name(r.get("TableEnumOrId")),
                         "tooling_id": r.get("Id"),
                     },
                     namespace=r.get("NamespacePrefix"),
@@ -388,15 +435,15 @@ class ToolingApiPullClient:
         return out
 
     async def _validation_rules(self) -> list[RawMetadataRecord]:
-        rows = await self._tq(
-            "SELECT Id, ValidationName, Active, NamespacePrefix, EntityDefinition.QualifiedApiName, Metadata FROM ValidationRule"
+        rows = await self._with_metadata(
+            "ValidationRule",
+            "Id, ValidationName, Active, NamespacePrefix, EntityDefinition.QualifiedApiName",
         )
         out = []
         for r in rows:
             obj = str((r.get("EntityDefinition") or {}).get("QualifiedApiName", ""))
             name = str(r.get("ValidationName", ""))
-            meta_raw = r.get("Metadata")
-            meta: dict[str, Any] = meta_raw if isinstance(meta_raw, dict) else {}
+            meta: dict[str, Any] = r["Metadata"]
             meta.setdefault("active", bool(r.get("Active", True)))
             out.append(
                 self._rec(
@@ -429,10 +476,10 @@ class ToolingApiPullClient:
                 },
             )
 
-        for r in await self._tq("SELECT Id, Name, TableEnumOrId, Metadata FROM WorkflowRule"):
-            meta = dict(r.get("Metadata") or {})
+        for r in await self._with_metadata("WorkflowRule", "Id, Name, TableEnumOrId"):
+            meta = dict(r["Metadata"])
             meta.setdefault("fullName", r.get("Name"))
-            bucket(str(r.get("TableEnumOrId", ""))).setdefault("rules", []).append(meta)
+            bucket(await self._object_name(r.get("TableEnumOrId")))["rules"].append(meta)
         for obj_name, key in (
             ("WorkflowFieldUpdate", "fieldUpdates"),
             ("WorkflowAlert", "alerts"),
@@ -440,18 +487,16 @@ class ToolingApiPullClient:
             ("WorkflowOutboundMessage", "outboundMessages"),
         ):
             try:
-                rows = await self._tq(
-                    f"SELECT Id, Name, EntityDefinitionId, Metadata FROM {obj_name}"
-                )
+                rows = await self._with_metadata(obj_name, "Id, Name, EntityDefinitionId")
             except Exception as exc:
                 log.warning(
                     "extract.tooling.workflow_action_query_failed", type=obj_name, error=str(exc)
                 )
                 continue
             for r in rows:
-                meta = dict(r.get("Metadata") or {})
+                meta = dict(r["Metadata"])
                 meta.setdefault("fullName", r.get("Name"))
-                bucket(str(r.get("EntityDefinitionId", "")))[key].append(meta)
+                bucket(await self._object_name(r.get("EntityDefinitionId")))[key].append(meta)
         return [
             self._rec(
                 CategoryName.WORKFLOW_RULE,
@@ -467,14 +512,13 @@ class ToolingApiPullClient:
         ]
 
     async def _custom_fields(self) -> list[RawMetadataRecord]:
-        rows = await self._tq(
-            "SELECT Id, DeveloperName, NamespacePrefix, TableEnumOrId, Metadata FROM CustomField"
+        rows = await self._with_metadata(
+            "CustomField", "Id, DeveloperName, NamespacePrefix, TableEnumOrId"
         )
         out = []
         for r in rows:
-            meta_raw = r.get("Metadata")
-            meta: dict[str, Any] = meta_raw if isinstance(meta_raw, dict) else {}
-            obj = str(r.get("TableEnumOrId", ""))
+            meta: dict[str, Any] = r["Metadata"]
+            obj = await self._object_name(r.get("TableEnumOrId"))
             name = f"{r.get('DeveloperName', '')}__c"
             meta.setdefault("fullName", name)
             if meta.get("summaryOperation"):
@@ -551,16 +595,16 @@ class ToolingApiPullClient:
     async def _cdc(self) -> list[RawMetadataRecord]:
         try:
             rows = await self._tq(
-                "SELECT SelectedEntity, PlatformEventChannel.DeveloperName FROM PlatformEventChannelMember"
+                "SELECT SelectedEntity, EventChannel FROM PlatformEventChannelMember"
             )
         except Exception as exc:
             log.warning("extract.tooling.cdc_query_failed", error=str(exc))
             rows = []
         by_channel: dict[str, list[str]] = {}
         for r in rows:
-            ch = str((r.get("PlatformEventChannel") or {}).get("DeveloperName", "ChangeEvents"))
+            ch = str(r.get("EventChannel") or "ChangeEvents")
             by_channel.setdefault(ch, []).append(
-                str(r.get("SelectedEntity", "")).replace("ChangeEvent", "")
+                _entity_from_change_event(str(r.get("SelectedEntity", "")))
             )
         return [
             self._rec(
@@ -575,29 +619,34 @@ class ToolingApiPullClient:
         ]
 
     async def _approval_processes(self) -> list[RawMetadataRecord]:
-        rows = await self._tq(
+        """``ProcessDefinition`` is a standard REST object; it exposes name, object, and state only."""
+        rows = await self._q(
             "SELECT Id, DeveloperName, Name, TableEnumOrId, State, Type FROM ProcessDefinition WHERE Type = 'Approval'"
         )
         if rows:
             self.stats.partial_categories.append(CategoryName.APPROVAL_PROCESS.value)
-        return [
-            self._rec(
-                CategoryName.APPROVAL_PROCESS,
-                f"{r.get('TableEnumOrId', '')}.{r.get('DeveloperName', '')}",
-                {
-                    "path": f"approvalProcesses/{r.get('TableEnumOrId', '')}.{r.get('DeveloperName', '')}.approvalProcess-meta.xml",
-                    "parsed": {
-                        "ApprovalProcess": {
-                            "label": r.get("Name", ""),
-                            "active": str(r.get("State", "")) == "Active",
-                        }
+        out = []
+        for r in rows:
+            obj = await self._object_name(r.get("TableEnumOrId"))
+            name = f"{obj}.{r.get('DeveloperName', '')}"
+            out.append(
+                self._rec(
+                    CategoryName.APPROVAL_PROCESS,
+                    name,
+                    {
+                        "path": f"approvalProcesses/{name}.approvalProcess-meta.xml",
+                        "parsed": {
+                            "ApprovalProcess": {
+                                "label": r.get("Name", ""),
+                                "active": str(r.get("State", "")) == "Active",
+                            }
+                        },
+                        "object_from_path": obj,
+                        "partial": True,
                     },
-                    "object_from_path": str(r.get("TableEnumOrId", "")),
-                    "partial": True,
-                },
+                )
             )
-            for r in rows
-        ]
+        return out
 
     async def _partial_rules(
         self, cat: CategoryName, tooling_object: str
@@ -662,6 +711,230 @@ class ToolingApiPullClient:
             if obj
         ]
 
+    # ---- surface categories ------------------------------------------------------
+
+    async def _layouts(self) -> list[RawMetadataRecord]:
+        rows = await self._with_metadata("Layout", "Id, Name, TableEnumOrId, NamespacePrefix")
+        out = []
+        for r in rows:
+            meta: dict[str, Any] = r["Metadata"]
+            obj = await self._object_name(r.get("TableEnumOrId"))
+            name = f"{obj}-{r.get('Name', '')}"
+            out.append(
+                self._rec(
+                    CategoryName.PAGE_LAYOUT,
+                    name,
+                    {
+                        "path": f"layouts/{name}.layout-meta.xml",
+                        "parsed": {"Layout": meta},
+                        "object_from_path": obj,
+                        "tooling_id": r.get("Id"),
+                    },
+                    namespace=r.get("NamespacePrefix"),
+                )
+            )
+        return out
+
+    async def _flexipages(self) -> list[RawMetadataRecord]:
+        rows = await self._with_metadata("FlexiPage", "Id, DeveloperName, NamespacePrefix, Type")
+        out = []
+        for r in rows:
+            meta: dict[str, Any] = r["Metadata"]
+            meta.setdefault("type", r.get("Type", ""))
+            name = str(r.get("DeveloperName", ""))
+            out.append(
+                self._rec(
+                    CategoryName.FLEXIPAGE,
+                    name,
+                    {
+                        "path": f"flexipages/{name}.flexipage-meta.xml",
+                        "parsed": {"FlexiPage": meta},
+                        "tooling_id": r.get("Id"),
+                    },
+                    namespace=r.get("NamespacePrefix"),
+                )
+            )
+        return out
+
+    async def _permissions(self) -> list[RawMetadataRecord]:
+        """Permission sets + profiles composed from FieldPermissions / ObjectPermissions / SetupEntityAccess."""
+        parents = await self._q(
+            "SELECT Id, Name, Label, IsOwnedByProfile, Profile.Name, IsCustom FROM PermissionSet"
+        )
+        if not parents:
+            return []
+        bodies: dict[str, dict[str, Any]] = {}
+        meta_by_id: dict[str, dict[str, Any]] = {}
+        for p in parents:
+            pid = str(p.get("Id"))
+            meta_by_id[pid] = p
+            bodies[pid] = {
+                "label": p.get("Label", ""),
+                "fieldPermissions": [],
+                "objectPermissions": [],
+                "classAccesses": [],
+                "pageAccesses": [],
+                "flowAccesses": [],
+            }
+        for fp in await self._q(
+            "SELECT ParentId, Field, PermissionsRead, PermissionsEdit FROM FieldPermissions"
+        ):
+            b = bodies.get(str(fp.get("ParentId")))
+            if b is not None:
+                b["fieldPermissions"].append(
+                    {
+                        "field": fp.get("Field", ""),
+                        "readable": bool(fp.get("PermissionsRead")),
+                        "editable": bool(fp.get("PermissionsEdit")),
+                    }
+                )
+        for op in await self._q(
+            "SELECT ParentId, SobjectType, PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete FROM ObjectPermissions"
+        ):
+            b = bodies.get(str(op.get("ParentId")))
+            if b is not None:
+                b["objectPermissions"].append(
+                    {
+                        "object": op.get("SobjectType", ""),
+                        "allowRead": bool(op.get("PermissionsRead")),
+                        "allowCreate": bool(op.get("PermissionsCreate")),
+                        "allowEdit": bool(op.get("PermissionsEdit")),
+                        "allowDelete": bool(op.get("PermissionsDelete")),
+                    }
+                )
+        try:
+            access = await self._q(
+                "SELECT ParentId, SetupEntityId, SetupEntityType FROM SetupEntityAccess WHERE SetupEntityType IN ('ApexClass', 'ApexPage', 'FlowDefinition')"
+            )
+        except Exception as exc:
+            log.warning("extract.tooling.setup_entity_access_failed", error=str(exc))
+            access = []
+        if access:
+            names = await self._setup_entity_names(access)
+            for a in access:
+                b = bodies.get(str(a.get("ParentId")))
+                nm = names.get(str(a.get("SetupEntityId")))
+                if b is None or not nm:
+                    continue
+                t = str(a.get("SetupEntityType"))
+                if t == "ApexClass":
+                    b["classAccesses"].append({"apexClass": nm, "enabled": True})
+                elif t == "ApexPage":
+                    b["pageAccesses"].append({"apexPage": nm, "enabled": True})
+                elif t == "FlowDefinition":
+                    b["flowAccesses"].append({"flow": nm, "enabled": True})
+        out = []
+        for pid, body in bodies.items():
+            p = meta_by_id[pid]
+            if p.get("IsOwnedByProfile"):
+                name = str((p.get("Profile") or {}).get("Name") or p.get("Label") or pid)
+                body["custom"] = bool(p.get("IsCustom"))
+                out.append(
+                    self._rec(
+                        CategoryName.PROFILE,
+                        name,
+                        {
+                            "path": f"profiles/{name}.profile-meta.xml",
+                            "parsed": {"Profile": body},
+                            "tooling_id": pid,
+                        },
+                    )
+                )
+            else:
+                name = str(p.get("Name") or pid)
+                out.append(
+                    self._rec(
+                        CategoryName.PERMISSION_SET,
+                        name,
+                        {
+                            "path": f"permissionsets/{name}.permissionset-meta.xml",
+                            "parsed": {"PermissionSet": body},
+                            "tooling_id": pid,
+                        },
+                    )
+                )
+        return out
+
+    async def _setup_entity_names(self, access: list[dict[str, Any]]) -> dict[str, str]:
+        names: dict[str, str] = {}
+        by_type: dict[str, set[str]] = {}
+        for a in access:
+            by_type.setdefault(str(a.get("SetupEntityType")), set()).add(
+                str(a.get("SetupEntityId"))
+            )
+        for t, ids in by_type.items():
+            obj, col = {
+                "ApexClass": ("ApexClass", "Name"),
+                "ApexPage": ("ApexPage", "Name"),
+                "FlowDefinition": ("FlowDefinition", "DeveloperName"),
+            }[t]
+            idl = list(ids)
+            for i in range(0, len(idl), 200):
+                chunk = ", ".join(f"'{x}'" for x in idl[i : i + 200])
+                for r in await self._tq(f"SELECT Id, {col} FROM {obj} WHERE Id IN ({chunk})"):
+                    names[str(r.get("Id"))] = str(r.get(col, ""))
+        return names
+
+    async def _reports(self, *, max_reports: int = 300) -> list[RawMetadataRecord]:
+        """Report columns via the Analytics ``describe`` endpoint, capped (use the Metadata API path for all)."""
+        rows = await self._q(
+            "SELECT Id, DeveloperName, Name, FolderName FROM Report ORDER BY LastRunDate DESC NULLS LAST"
+        )
+        if len(rows) > max_reports:
+            self.stats.partial_categories.append(CategoryName.REPORT.value)
+            rows = rows[:max_reports]
+        out = []
+        for r in rows:
+            try:
+                desc = await self.gateway.sf_restful(f"analytics/reports/{r.get('Id')}/describe")
+                self.stats.queries += 1
+            except Exception as exc:
+                log.warning(
+                    "extract.tooling.report_describe_failed",
+                    report=r.get("DeveloperName"),
+                    error=str(exc),
+                )
+                continue
+            rm = (desc or {}).get("reportMetadata") or {}
+            body = {
+                "name": r.get("Name", ""),
+                "reportType": str((rm.get("reportType") or {}).get("type", "")),
+                "format": rm.get("reportFormat", ""),
+                "columns": [{"field": c} for c in rm.get("detailColumns", [])],
+                "groupingsDown": [
+                    {"field": g.get("name", "")}
+                    for g in rm.get("groupingsDown", [])
+                    if isinstance(g, dict)
+                ],
+                "filter": {
+                    "criteriaItems": [
+                        {"column": f.get("column", "")}
+                        for f in rm.get("reportFilters", [])
+                        if isinstance(f, dict)
+                    ]
+                },
+            }
+            folder = str(r.get("FolderName") or "unfiled$public").replace(" ", "_")
+            name = f"{folder}/{r.get('DeveloperName', '')}"
+            out.append(
+                self._rec(
+                    CategoryName.REPORT,
+                    name,
+                    {
+                        "path": f"reports/{name}.report-meta.xml",
+                        "parsed": {"Report": body},
+                        "tooling_id": r.get("Id"),
+                    },
+                )
+            )
+        return out
+
+    async def _q(self, soql: str) -> list[dict[str, Any]]:
+        """Plain REST query (non-Tooling objects: PermissionSet, FieldPermissions, Report)."""
+        self.stats.queries += 1
+        resp = await self.gateway.sf_query(soql)
+        return [r for r in resp.get("records", []) if isinstance(r, dict)]
+
 
 _FLOW_CATEGORIES = {
     CategoryName.RECORD_TRIGGERED_FLOW,
@@ -672,6 +945,15 @@ _FLOW_CATEGORIES = {
     CategoryName.FLOW_ORCHESTRATION,
     CategoryName.PROCESS_BUILDER,
 }
+
+
+def _entity_from_change_event(name: str) -> str:
+    """``AccountChangeEvent`` → ``Account``; ``Deal__ChangeEvent`` → ``Deal__c``."""
+    if name.endswith("__ChangeEvent"):
+        return name[: -len("__ChangeEvent")] + "__c"
+    if name.endswith("ChangeEvent"):
+        return name[: -len("ChangeEvent")]
+    return name
 
 
 def classify_flow(meta: dict[str, Any]) -> CategoryName:

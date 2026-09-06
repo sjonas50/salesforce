@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FlexiPage xmlns="http://soap.sforce.com/2006/04/metadata">
+    <masterLabel>Lead Record Page</masterLabel>
+    <sobjectType>Lead</sobjectType>
+    <type>RecordPage</type>
+    <flexiPageRegions>
+        <name>main</name>
+        <type>Region</type>
+        <itemInstances>
+            <componentInstance>
+                <componentName>flowruntime:flowRuntime</componentName>
+                <componentInstanceProperties><name>flowName</name><value>CaptureLeadDetails</value></componentInstanceProperties>
+            </componentInstance>
+        </itemInstances>
+        <itemInstances>
+            <componentInstance><componentName>c:leadCard</componentName></componentInstance>
+        </itemInstances>
+        <itemInstances>
+            <fieldInstance><fieldItem>Record.Routed__c</fieldItem></fieldInstance>
+        </itemInstances>
+    </flexiPageRegions>
+</FlexiPage>

@@ -17,10 +17,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CategoryName(StrEnum):
-    """The 21 Salesforce automation categories defined in the v2.1 reference.
+    """The 21 Salesforce automation categories (v2.1 reference §7.3) plus the
+    five *surface* categories X-Ray needs for "where is this used": page
+    layouts, Lightning pages, permission sets, profiles, reports.
 
-    Order matches the v2.1 reference document (§7.3 table). Do not reorder
-    without coordinating with the OoE Surface Audit (C4) which keys on this enum.
+    Surface categories never fire on save (no OoE step) and count as UI /
+    security / reporting references rather than automation. Order matches
+    the v2.1 reference for the first 21; do not reorder without coordinating
+    with the OoE Surface Audit (C4) which keys on this enum.
     """
 
     RECORD_TRIGGERED_FLOW = "record_triggered_flow"
@@ -44,6 +48,33 @@ class CategoryName(StrEnum):
     PLATFORM_EVENT = "platform_event"
     CHANGE_DATA_CAPTURE = "change_data_capture"
     LWC_BUNDLE = "lwc_bundle"
+    # ---- surface categories (UI / security / reporting) ----
+    PAGE_LAYOUT = "page_layout"
+    FLEXIPAGE = "flexipage"
+    PERMISSION_SET = "permission_set"
+    PROFILE = "profile"
+    REPORT = "report"
+
+
+AUTOMATION_CATEGORIES: frozenset[CategoryName] = frozenset(
+    c
+    for c in CategoryName
+    if c
+    not in {
+        CategoryName.PAGE_LAYOUT,
+        CategoryName.FLEXIPAGE,
+        CategoryName.PERMISSION_SET,
+        CategoryName.PROFILE,
+        CategoryName.REPORT,
+    }
+)
+UI_CATEGORIES: frozenset[CategoryName] = frozenset(
+    {CategoryName.PAGE_LAYOUT, CategoryName.FLEXIPAGE}
+)
+SECURITY_CATEGORIES: frozenset[CategoryName] = frozenset(
+    {CategoryName.PERMISSION_SET, CategoryName.PROFILE}
+)
+REPORTING_CATEGORIES: frozenset[CategoryName] = frozenset({CategoryName.REPORT})
 
 
 class Tier(StrEnum):
@@ -78,7 +109,7 @@ class Provenance(BaseModel):
 
 
 class Component(BaseModel):
-    """One piece of Salesforce automation as extracted by Phase 1.
+    """One piece of Salesforce automation as extracted by the extract engine.
 
     The ``content_hash`` is the canonical fingerprint anchored in Engram. Two
     Components with the same hash are guaranteed semantically identical.
@@ -129,6 +160,9 @@ class EvidenceChannel(StrEnum):
     PATH = "path"  # object inferred from file path (objects/<Object>/...)
     DEPENDENCY_API = "dependency_api"  # MetadataComponentDependency row (cross-check)
     CRON = "cron"
+    LAYOUT_XML = "layout_xml"  # page layouts, Lightning pages
+    PERMISSION_XML = "permission_xml"  # permission sets, profiles (FLS, class/flow access)
+    REPORT_XML = "report_xml"
 
 
 class Dependency(BaseModel):
@@ -189,6 +223,46 @@ class SchemaNode(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class FieldProfile(BaseModel):
+    """How populated one field is, from an aggregate query over live records."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_name: str
+    non_null: int
+    fill_rate: Annotated[float, Field(ge=0.0, le=1.0)]
+
+
+class ObjectProfile(BaseModel):
+    """Record volume + field population for one sObject."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    object_name: str
+    record_count: int | None = Field(default=None, description="None when the count query failed")
+    last_modified: datetime | None = None
+    fields: dict[str, FieldProfile] = Field(
+        default_factory=dict, description="keyed by 'Object.Field'"
+    )
+    error: str | None = None
+
+
+class DataProfile(BaseModel):
+    """Data-level evidence: record counts and field fill rates (build plan D.8)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    org_alias: str
+    objects: dict[str, ObjectProfile] = Field(default_factory=dict)
+    sampled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    source: str = "aggregate_queries"
+
+    def field(self, qualified: str) -> FieldProfile | None:
+        obj, _, _ = qualified.partition(".")
+        op = self.objects.get(obj)
+        return op.fields.get(qualified) if op else None
+
+
 class SchemaSnapshot(BaseModel):
     """Data model of one org at extraction time."""
 
@@ -209,7 +283,7 @@ class SchemaSnapshot(BaseModel):
 
 
 class AST(BaseModel):
-    """Parsed AST attached to a Component (Phase 1 output, Phase 3 input)."""
+    """Parsed AST attached to a Component (extract output, translator input)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -220,7 +294,7 @@ class AST(BaseModel):
 
 
 class TranslationArtifact(BaseModel):
-    """A generated runtime artifact for one Component / process (Phase 3 output)."""
+    """A generated runtime artifact for one Component / process (translator output)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -234,7 +308,7 @@ class TranslationArtifact(BaseModel):
 
 
 class ShadowComparison(BaseModel):
-    """One observation from the shadow executor (Phase 4 output)."""
+    """One observation from the shadow executor."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -258,7 +332,7 @@ class ShadowComparison(BaseModel):
 
 
 class RoutingDecision(BaseModel):
-    """One per-record cutover routing decision (Phase 5 output)."""
+    """One per-record cutover routing decision."""
 
     model_config = ConfigDict(extra="forbid")
 

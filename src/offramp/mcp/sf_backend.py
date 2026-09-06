@@ -1,8 +1,7 @@
 """Real Salesforce backend for the MCP gateway (simple-salesforce + JWT).
 
-Phase 3 wired the real backend behind the :class:`SalesforceBackend`
-Protocol so existing tests against the in-memory backend still pass — the
-gateway picks one or the other at startup. The JWT bearer flow is now
+Implements the :class:`SalesforceBackend` Protocol so tests against the
+in-memory backend still pass — the gateway picks one or the other at startup. The JWT bearer flow is now
 fully implemented in :mod:`offramp.mcp.jwt_auth`; this module owns the
 backend lifecycle (connect / invalidate / aclose) and the CRUD methods.
 
@@ -40,9 +39,9 @@ class SimpleSalesforceBackend:
     configured ``process_id`` and raises :class:`QuotaExhausted` when the
     process is over its share.
 
-    Phase 3 ships the integration; the real auth flow + simple-salesforce
-    object construction is gated behind ``connect()`` so unit tests that
-    exercise the budget path don't need a real org.
+    The auth flow + simple-salesforce object construction is gated behind
+    ``connect()`` so unit tests that exercise the budget path don't need a
+    real org.
     """
 
     settings: SalesforceSettings
@@ -188,6 +187,57 @@ class SimpleSalesforceBackend:
         sf = await self.connect()
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: sf.restful(path, params))
+
+    async def mdapi_retrieve(
+        self,
+        unpackaged: dict[str, list[str]],
+        *,
+        poll_seconds: float = 3.0,
+        timeout_seconds: float = 900.0,
+    ) -> bytes:
+        """SOAP Metadata API retrieve: submit, poll ``checkRetrieveStatus``, return the ZIP."""
+        await self._charge_quota()
+        sf = await self.connect()
+        loop = asyncio.get_running_loop()
+        mdapi = sf.mdapi
+        async_id, state = await loop.run_in_executor(
+            None, lambda: mdapi.retrieve("", unpackaged=unpackaged, single_package=True)
+        )
+        if not async_id:
+            raise JWTAuthError(f"Metadata API retrieve was not accepted (state={state})")
+        waited = 0.0
+        while True:
+            state, _msg, _files, blob = await loop.run_in_executor(
+                None, lambda: mdapi.retrieve_zip(async_id)
+            )
+            if state == "Succeeded":
+                return bytes(blob)
+            if state in {"Failed", "Error"}:
+                raise RuntimeError(f"Metadata API retrieve {async_id} failed: {_msg}")
+            if waited >= timeout_seconds:
+                raise TimeoutError(
+                    f"Metadata API retrieve {async_id} still {state} after {timeout_seconds}s"
+                )
+            await asyncio.sleep(poll_seconds)
+            waited += poll_seconds
+
+    async def mdapi_list(self, metadata_type: str, folder: str | None = None) -> list[str]:
+        """``listMetadata`` for one type (optionally inside a folder) → full names."""
+        await self._charge_quota()
+        sf = await self.connect()
+        loop = asyncio.get_running_loop()
+        query: dict[str, Any] = {"type": metadata_type}
+        if folder:
+            query["folder"] = folder
+        rows = await loop.run_in_executor(None, lambda: sf.mdapi.list_metadata([query]))
+        names: list[str] = []
+        for r in rows or []:
+            full = getattr(r, "fullName", None) or (
+                r.get("fullName") if isinstance(r, dict) else None
+            )
+            if full:
+                names.append(str(full))
+        return names
 
 
 # JWT exchange now lives in offramp.mcp.jwt_auth. The old ``_jwt_session_id``

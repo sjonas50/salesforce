@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from offramp.core.models import CategoryName
-from offramp.extract.pull.base import PullClient, RawMetadataRecord
+from offramp.extract.pull.base import RawMetadataRecord
 from offramp.extract.pull.source_tree import SourceTree
 
 
@@ -54,10 +54,3 @@ class SourceDirPullClient(FixturePullClient):
     """Customer-supplied SFDX project directory (``offramp extract --source-dir``)."""
 
     source_name = "sfdx_project"
-
-
-def _ensure_protocol(client: PullClient) -> PullClient:
-    return client
-
-
-_ = _ensure_protocol

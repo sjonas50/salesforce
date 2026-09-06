@@ -26,25 +26,25 @@ def test_single_source_passes_through() -> None:
     assert res.disagreements == []
 
 
-def test_salto_wins_over_sf_cli_on_conflict() -> None:
+def test_sf_cli_wins_over_tooling_api_on_conflict() -> None:
     res = reconcile(
         [
+            _r("tooling_api", {"errorMessage": "From tooling"}),
             _r("sf_cli", {"errorMessage": "From sf_cli"}),
-            _r("salto", {"errorMessage": "From salto"}),
         ]
     )
-    assert res.records[0].payload["errorMessage"] == "From salto"
+    assert res.records[0].payload["errorMessage"] == "From sf_cli"
     assert len(res.disagreements) == 1
     dis = res.disagreements[0]
     assert dis.field_path == "errorMessage"
-    assert dis.values_by_source == {"sf_cli": "From sf_cli", "salto": "From salto"}
+    assert dis.values_by_source == {"tooling_api": "From tooling", "sf_cli": "From sf_cli"}
 
 
 def test_non_conflicting_fields_merge() -> None:
     res = reconcile(
         [
             _r("sf_cli", {"errorMessage": "X", "active": "true"}),
-            _r("salto", {"errorMessage": "X", "description": "D"}),
+            _r("tooling_api", {"errorMessage": "X", "description": "D"}),
         ]
     )
     assert res.records[0].payload == {

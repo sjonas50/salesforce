@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Layout xmlns="http://soap.sforce.com/2006/04/metadata">
+    <layoutSections>
+        <label>Lead Information</label>
+        <layoutColumns>
+            <layoutItems><behavior>Required</behavior><field>Company</field></layoutItems>
+            <layoutItems><behavior>Edit</behavior><field>Email</field></layoutItems>
+            <layoutItems><behavior>Edit</behavior><field>Country__c</field></layoutItems>
+            <layoutItems><behavior>Readonly</behavior><field>Score__c</field></layoutItems>
+        </layoutColumns>
+    </layoutSections>
+</Layout>

@@ -46,5 +46,11 @@
         "MetadataComponentName": "Pipeline_by_Segment",
         "RefMetadataComponentType": "CustomField",
         "RefMetadataComponentName": "Lead.Legacy_Segment__c"
+    },
+    {
+        "MetadataComponentType": "PermissionSet",
+        "MetadataComponentName": "Sales_User",
+        "RefMetadataComponentType": "CustomField",
+        "RefMetadataComponentName": "Lead.Country__c"
     }
 ]

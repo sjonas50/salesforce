@@ -61,6 +61,7 @@ class ApexAnalysis:
     named_credentials: list[str] = field(default_factory=list)
     async_calls: list[AsyncRef] = field(default_factory=list)
     type_forname_literals: list[str] = field(default_factory=list)
+    dynamic_access: list[str] = field(default_factory=list)  # see _DYNAMIC_PATTERNS
     custom_labels: list[str] = field(default_factory=list)
     custom_settings: list[str] = field(default_factory=list)
     trigger_object: str | None = None

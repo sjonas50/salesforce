@@ -33,6 +33,14 @@ async def _run_async(args: argparse.Namespace) -> int:
             result = await src.orchestrator.run()
         finally:
             await src.close()
+    if not result.components:
+        log.error(
+            "extract.cli.nothing_extracted",
+            gaps=result.coverage.suspected_gaps if result.coverage else [],
+            hint="check org auth / --via; see coverage.json suspected_gaps",
+        )
+        write_result(result, args.out)
+        return 4
     write_result(result, args.out)
     graph = result.build_graph()
     log.info(

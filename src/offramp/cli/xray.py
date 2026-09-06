@@ -57,6 +57,9 @@ def _run(args: argparse.Namespace) -> int:
 
 async def _run_async(args: argparse.Namespace) -> int:
     settings = get_settings()
+    if not args.skip_annotations and not settings.llm.api_key.get_secret_value():
+        log.error("xray.llm_key_missing", hint="set LLM_API_KEY or pass --skip-annotations")
+        return 3
     async with open_client() as engram:
         src = await connect(args, engram)
         if src is None:
@@ -105,9 +108,6 @@ async def _run_async(args: argparse.Namespace) -> int:
         # ---- LLM annotation ----
         annotations: list[Annotation] = []
         if not args.skip_annotations:
-            if not settings.llm.api_key.get_secret_value():
-                log.error("xray.llm_key_missing", hint="set LLM_API_KEY or pass --skip-annotations")
-                return 3
             annotator = Annotator.from_settings(settings.llm, engram=engram)
             log.info("xray.annotating", count=len(result.components), model=settings.llm.model)
             annotations = await annotator.annotate_many(

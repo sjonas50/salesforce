@@ -3,9 +3,12 @@
 Three ways to get metadata into the pipeline:
 
 * ``--fixture DIR`` / ``--source-dir DIR`` — read an sf-retrieve-shaped tree
-* ``--org ALIAS`` — REST/Tooling through the MCP gateway (JWT settings from env)
-* ``--org ALIAS --via sf-cli`` — ``sf project retrieve start`` into a temp dir,
-  then read the tree; Tooling supplement still comes from REST
+* ``--org ALIAS`` — REST/Tooling through the MCP gateway (JWT settings from env),
+  plus a Metadata API retrieve for the types Tooling cannot read in full
+* ``--org ALIAS --via mdapi`` — Metadata API retrieve for everything
+* ``--org ALIAS --via sf-cli`` — ``sf project retrieve start`` into a temp dir;
+  the Tooling supplement (CMT rows, dependencies, cron, schema, data profile)
+  still comes from REST
 """
 
 from __future__ import annotations
@@ -20,7 +23,6 @@ from offramp.core.logging import get_logger
 from offramp.engram.client import EngramClient
 from offramp.extract.orchestrator import ExtractOrchestrator, ExtractRunResult, ToolingSupplement
 from offramp.extract.pull.fixture import FixturePullClient, SourceDirPullClient
-from offramp.extract.pull.source_tree import SourceTree
 
 log = get_logger(__name__)
 
@@ -34,9 +36,12 @@ def add_source_args(p: argparse.ArgumentParser) -> None:
     src.add_argument("--org", help="Salesforce org alias; credentials from SF_* env (JWT bearer).")
     p.add_argument(
         "--via",
-        choices=["rest", "sf-cli"],
+        choices=["rest", "mdapi", "sf-cli"],
         default="rest",
-        help="With --org: REST/Tooling (default) or sf CLI retrieve.",
+        help=(
+            "With --org: REST/Tooling plus Metadata API for what Tooling cannot read (default), "
+            "Metadata API for everything, or sf CLI retrieve."
+        ),
     )
     p.add_argument("--org-alias", default=None, help="Override the org label used in outputs.")
     p.add_argument(
@@ -48,6 +53,11 @@ def add_source_args(p: argparse.ArgumentParser) -> None:
         "--no-dependency-api",
         action="store_true",
         help="Skip MetadataComponentDependency cross-check.",
+    )
+    p.add_argument(
+        "--no-data-profile",
+        action="store_true",
+        help="Skip record counts and field fill rates.",
     )
 
 
@@ -66,8 +76,12 @@ async def connect(args: argparse.Namespace, engram: EngramClient) -> ConnectedSo
             log.error("cli.source_not_found", path=str(root))
             return None
         alias = args.org_alias or root.name
-        client = FixturePullClient(root) if args.fixture is not None else SourceDirPullClient(root)
-        orch = ExtractOrchestrator(org_alias=alias, client=client, engram=engram, fixture_root=root)
+        dir_client = (
+            FixturePullClient(root) if args.fixture is not None else SourceDirPullClient(root)
+        )
+        orch = ExtractOrchestrator(
+            org_alias=alias, client=dir_client, engram=engram, fixture_root=root
+        )
 
         async def _noop() -> None:
             return None
@@ -77,14 +91,13 @@ async def connect(args: argparse.Namespace, engram: EngramClient) -> ConnectedSo
     # ---- real org ----
     settings = get_settings()
     alias = args.org_alias or args.org
-    from offramp.mcp.quota import QuotaAllocator
     from offramp.mcp.server import MCPGateway
     from offramp.mcp.sf_backend import SimpleSalesforceBackend
 
     sf_settings = settings.salesforce.model_copy(update={"org_alias": args.org})
+    # CLI scans run unmetered; the hosted service attaches a QuotaAllocator here.
     backend = SimpleSalesforceBackend(settings=sf_settings, process_id="xray", quota=None)
     gateway = MCPGateway(backend=backend, engram=engram)
-    _ = QuotaAllocator  # quota is wired in the hosted service; CLI scans run unmetered
 
     from offramp.extract.pull.tooling_api import ToolingApiPullClient
 
@@ -100,33 +113,44 @@ async def connect(args: argparse.Namespace, engram: EngramClient) -> ConnectedSo
         supplement.cron_rows = await tooling.cron_rows()
         if not args.no_schema:
             supplement.schema = await tooling.schema()
+        if not args.no_data_profile and supplement.schema is not None:
+            from offramp.extract.data_profile import profile_from_gateway
+
+            supplement.data_profile = await profile_from_gateway(
+                gateway, supplement.schema, org_alias=alias
+            )
     except Exception as exc:
         log.error("cli.org_supplement_failed", org=args.org, error=str(exc))
         await backend.aclose()
         return None
 
-    if args.via == "sf-cli":
-        import tempfile
+    import tempfile
 
+    from offramp.extract.pull.mdapi import PARTIAL_TYPES, CompositePullClient, MetadataApiPullClient
+
+    workdir = Path(tempfile.mkdtemp(prefix=f"offramp-{alias}-"))
+    client: Any
+    if args.via == "sf-cli":
         from offramp.extract.pull.sf_cli import SfCliPullClient
 
-        out = Path(tempfile.mkdtemp(prefix=f"offramp-{alias}-"))
-        cli_client = SfCliPullClient(
-            org_alias=args.org, output_dir=out, api_version=sf_settings.api_version
+        client = SfCliPullClient(
+            org_alias=args.org, output_dir=workdir, api_version=sf_settings.api_version
         )
-        # Source-tree schema is richer for custom objects; merge with describe.
-        if supplement.schema is not None:
-            from offramp.extract.schema import from_source_tree, merge
-
-            tree_schema = from_source_tree(SourceTree(out), org_alias=alias)
-            supplement.schema = merge(tree_schema, supplement.schema)
-        orch = ExtractOrchestrator(
-            org_alias=alias, client=cli_client, engram=engram, supplement=supplement
+    elif args.via == "mdapi":
+        client = MetadataApiPullClient(
+            gateway=gateway, org_alias=alias, workdir=workdir, api_version=sf_settings.api_version
         )
     else:
-        orch = ExtractOrchestrator(
-            org_alias=alias, client=tooling, engram=engram, supplement=supplement
+        # REST for the bulk; Metadata API only for the types Tooling cannot read in full.
+        fill_in = MetadataApiPullClient(
+            gateway=gateway,
+            org_alias=alias,
+            workdir=workdir,
+            api_version=sf_settings.api_version,
+            types=PARTIAL_TYPES,
         )
+        client = CompositePullClient(tooling, fill_in)
+    orch = ExtractOrchestrator(org_alias=alias, client=client, engram=engram, supplement=supplement)
 
     return ConnectedSource(alias, orch, backend.aclose)
 

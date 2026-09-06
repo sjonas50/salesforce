@@ -112,7 +112,9 @@ These are the things that will silently bite. **Read these before writing code t
 11. **n8n Sustainable Use License** prohibits SaaS-product use. If we ever bundle n8n as a no-code lane, internal automation only.
 12. **`MetadataComponentDependency` is Beta** (still at v68.0). 2,000 rows per Tooling query, 100,000 via Bulk 2.0, no `queryMore`/`OFFSET`, no filter by component name, reports omitted, Bulk queries fail in Developer Edition. Query it per `MetadataComponentType`, never as one unbounded query, and never make it the only source of an edge (AD-28).
 13. **Metadata API retrieve caps**: 10,000 files / 39 MB compressed per retrieve. The sf CLI pull client batches `package.xml` per type and re-splits on failure.
-14. **Categories registry is lazy.** `offramp.extract.categories.base.get_extractor` imports the extractor modules on first call to avoid the LWC ↔ registry circular import. Do not import `offramp.extract.lwc.bundle` from `_passthrough.py`.
+14. **Tooling API quirks that bit us**: `Metadata` / `FullName` on ValidationRule, WorkflowRule, CustomField, Layout, FlexiPage are only queryable one record at a time (list Ids, then fetch each); `TableEnumOrId` is a CustomObject Id (`01I…`) for custom objects, not a name; CronTrigger, AsyncApexJob, ProcessDefinition, PermissionSet, FieldPermissions, Report are REST objects, not Tooling objects; `PlatformEventChannelMember` exposes `EventChannel` + `SelectedEntity` (`Deal__ChangeEvent` → `Deal__c`).
+15. **`CategoryName` has 26 members**: the 21 automation categories plus five *surface* categories (page layout, Lightning page, permission set, profile, report). Surfaces never fire on save and never count as automation usage; use `AUTOMATION_CATEGORIES` when you mean the 21.
+16. **Categories registry is lazy.** `offramp.extract.categories.base.get_extractor` imports the extractor modules on first call to avoid the LWC ↔ registry circular import. Do not import `offramp.extract.lwc.bundle` from `_passthrough.py`.
 
 ## Conventions
 

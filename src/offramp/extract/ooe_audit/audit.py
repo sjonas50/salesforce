@@ -76,6 +76,11 @@ _CATEGORY_TO_STEPS: dict[CategoryName, set[OoEStep]] = {
     CategoryName.PLATFORM_EVENT: {OoEStep.POST_COMMIT_LOGIC},
     CategoryName.CHANGE_DATA_CAPTURE: {OoEStep.POST_COMMIT_LOGIC},
     CategoryName.LWC_BUNDLE: set(),  # client-side; not on save path
+    CategoryName.PAGE_LAYOUT: set(),  # surface categories never fire on save
+    CategoryName.FLEXIPAGE: set(),
+    CategoryName.PERMISSION_SET: set(),
+    CategoryName.PROFILE: set(),
+    CategoryName.REPORT: set(),
 }
 
 
