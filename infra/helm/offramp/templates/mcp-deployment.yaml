@@ -17,10 +17,14 @@ spec:
         {{- include "offramp.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: mcp
     spec:
+      securityContext:
+        {{- include "offramp.podSecurityContext" . | nindent 8 }}
       containers:
         - name: mcp
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "offramp.containerSecurityContext" . | nindent 12 }}
           args: ["uv", "run", "python", "-m", "offramp.mcp.server"]
           ports:
             - name: http
@@ -38,10 +42,12 @@ spec:
               value: {{ .Values.observability.logLevel | quote }}
             - name: LOG_FORMAT
               value: {{ .Values.observability.logFormat | quote }}
+            {{- include "offramp.tmpEnv" . | nindent 12 }}
           volumeMounts:
             - name: sf-jwt
               mountPath: /secrets
               readOnly: true
+            {{- include "offramp.tmpVolumeMount" . | nindent 12 }}
           resources:
             {{- toYaml .Values.mcp.resources | nindent 12 }}
           livenessProbe:
@@ -58,6 +64,7 @@ spec:
         - name: sf-jwt
           secret:
             secretName: {{ tpl .Values.salesforceAuth.jwtSecretName . }}
+        {{- include "offramp.tmpVolume" . | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

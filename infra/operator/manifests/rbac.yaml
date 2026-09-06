@@ -4,6 +4,10 @@ metadata:
   name: offramp-operator
   namespace: offramp-system
 ---
+# Cluster-scoped: the operator watches OfframpSecretMount CRDs in every
+# customer namespace and emits events. It deliberately has NO cluster-wide
+# access to Secrets (Trivy KSV-0041) — that is granted per customer namespace
+# by the Role below, in keeping with single-tenant-per-customer (AD-10).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -12,9 +16,6 @@ rules:
   - apiGroups: [offramp.attic.ai]
     resources: [offrampsecretmounts, offrampsecretmounts/status]
     verbs: [get, list, watch, update, patch]
-  - apiGroups: [""]
-    resources: [secrets]
-    verbs: [get, list, watch, create, update, patch]
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
@@ -31,3 +32,30 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: offramp-operator
+---
+# Namespace-scoped: Secrets materialization is confined to the customer
+# namespace the Off-Ramp chart is installed into. Stamp one Role +
+# RoleBinding pair per customer namespace (replace "offramp" below).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: offramp-operator-secrets
+  namespace: offramp
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, watch, create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: offramp-operator-secrets
+  namespace: offramp
+subjects:
+  - kind: ServiceAccount
+    name: offramp-operator
+    namespace: offramp-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: offramp-operator-secrets

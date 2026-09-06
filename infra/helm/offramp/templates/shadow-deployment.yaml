@@ -17,10 +17,14 @@ spec:
         {{- include "offramp.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: shadow
     spec:
+      securityContext:
+        {{- include "offramp.podSecurityContext" . | nindent 8 }}
       containers:
         - name: shadow
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "offramp.containerSecurityContext" . | nindent 12 }}
           args: ["uv", "run", "offramp", "shadow", "start", "--process-id", "$(PROCESS_ID)"]
           env:
             - name: PROCESS_ID
@@ -29,5 +33,10 @@ spec:
               value: "api.pubsub.salesforce.com:7443"
             - name: SF_CDC_REPLAY_RECONCILE_THRESHOLD_HOURS
               value: {{ .Values.shadow.cdcReplayReconcileThresholdHours | quote }}
+            {{- include "offramp.tmpEnv" . | nindent 12 }}
+          volumeMounts:
+            {{- include "offramp.tmpVolumeMount" . | nindent 12 }}
           resources:
             {{- toYaml .Values.shadow.resources | nindent 12 }}
+      volumes:
+        {{- include "offramp.tmpVolume" . | nindent 8 }}

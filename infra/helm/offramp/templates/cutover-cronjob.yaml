@@ -14,9 +14,15 @@ spec:
       template:
         spec:
           restartPolicy: OnFailure
+          securityContext:
+            {{- include "offramp.podSecurityContext" . | nindent 12 }}
           containers:
             - name: cutover
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              securityContext:
+                {{- include "offramp.containerSecurityContext" . | nindent 16 }}
+              env:
+                {{- include "offramp.tmpEnv" . | nindent 16 }}
               # Process ids come from a ConfigMap the engagement team writes.
               args:
                 - sh
@@ -28,8 +34,10 @@ spec:
               volumeMounts:
                 - name: processes
                   mountPath: /etc/offramp
+                {{- include "offramp.tmpVolumeMount" . | nindent 16 }}
           volumes:
             - name: processes
               configMap:
                 name: {{ include "offramp.componentName" (dict "Release" .Release "component" "cutover-processes") }}
                 optional: true
+            {{- include "offramp.tmpVolume" . | nindent 12 }}
