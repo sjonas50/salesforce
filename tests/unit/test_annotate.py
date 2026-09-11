@@ -33,7 +33,7 @@ def _component(cat: CategoryName, name: str, raw: dict[str, Any], **kw: Any) -> 
         name=name,
         api_name=name,
         raw=raw,
-        content_hash=("%064x" % abs(hash((cat.value, name))))[:64],
+        content_hash=f"{abs(hash((cat.value, name))):064x}"[:64],
         provenance=Provenance(source_tool="unit", source_version="0"),
         **kw,
     )
