@@ -188,13 +188,30 @@ class SimpleSalesforceBackend:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: sf.restful(path, params))
 
+    async def get_text(self, path: str) -> str:
+        """Raw GET as text (``restful`` insists on JSON; ApexLog bodies are text)."""
+        await self._charge_quota()
+        sf = await self.connect()
+        loop = asyncio.get_running_loop()
+
+        def _get() -> str:
+            resp = sf.session.get(f"{sf.base_url}{path}", headers=sf.headers)
+            resp.raise_for_status()
+            return str(resp.text)
+
+        return await loop.run_in_executor(None, _get)
+
     async def request(self, method: str, path: str, json: Any | None = None) -> Any:
         """Non-GET call: ``sf.restful(path, method=..., json=...)`` (REST and Tooling paths)."""
         await self._charge_quota()
         sf = await self.connect()
         loop = asyncio.get_running_loop()
+        # Explicit JSON headers: the SOAP Metadata API client shares this session and
+        # leaves ``Content-Type: text/xml`` on it after a deploy/retrieve (HTTP 415 otherwise).
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
         return await loop.run_in_executor(
-            None, lambda: sf.restful(path, method=method.upper(), json=json)
+            None,
+            lambda: sf.restful(path, method=method.upper(), json=json, headers=headers),
         )
 
     async def mdapi_retrieve(
@@ -204,14 +221,35 @@ class SimpleSalesforceBackend:
         poll_seconds: float = 3.0,
         timeout_seconds: float = 900.0,
     ) -> bytes:
-        """SOAP Metadata API retrieve: submit, poll ``checkRetrieveStatus``, return the ZIP."""
+        """SOAP Metadata API retrieve: submit, poll ``checkRetrieveStatus``, return the ZIP.
+
+        After a few hundred REST/Tooling calls on the same session the SOAP endpoint
+        has answered a retrieve with an empty 404 ("Resource Not Found") that a fresh
+        connection does not reproduce; one retry on a new session covers it.
+        """
         await self._charge_quota()
-        sf = await self.connect()
         loop = asyncio.get_running_loop()
-        mdapi = sf.mdapi
-        async_id, state = await loop.run_in_executor(
-            None, lambda: mdapi.retrieve("", unpackaged=unpackaged, single_package=True)
-        )
+        try:
+            sf = await self.connect()
+            mdapi = sf.mdapi
+            async_id, state = await loop.run_in_executor(
+                None, lambda: mdapi.retrieve("", unpackaged=unpackaged, single_package=True)
+            )
+        except Exception as exc:
+            if "Not Found" not in str(exc):
+                raise
+            log.warning(
+                "mcp.mdapi_retrieve_retry",
+                error_type=type(exc).__name__,
+                error=str(exc)[:160],
+                types=sorted(unpackaged),
+            )
+            await self.invalidate_session()
+            sf = await self.connect()
+            mdapi = sf.mdapi
+            async_id, state = await loop.run_in_executor(
+                None, lambda: mdapi.retrieve("", unpackaged=unpackaged, single_package=True)
+            )
         if not async_id:
             raise JWTAuthError(f"Metadata API retrieve was not accepted (state={state})")
         waited = 0.0

@@ -60,7 +60,21 @@ def verify_process(p: ProcessDefinition, trace: ExecutionTrace | None) -> Verifi
         )
     steps = {s.id: s for s in p.steps}
     checks: list[Check] = [Check("trace_found", True, f"interview {trace.interview_id or '?'}")]
-    visited = trace.path
+    # A subflow's elements are logged under the parent's interview, right after the
+    # step that called it. They belong to the subflow's model, not this one.
+    visited: list[str] = []
+    nested: list[str] = []
+    in_call = False
+    for name in trace.path:
+        if name in steps:
+            visited.append(name)
+            in_call = steps[name].kind in {StepKind.CALL_PROCESS, StepKind.CALL_CODE}
+        elif in_call:
+            nested.append(name)
+        else:
+            visited.append(name)
+    if nested:
+        checks.append(Check("nested_elements", True, f"{len(nested)} subflow element(s): {nested}"))
     unknown = [n for n in visited if n not in steps]
     checks.append(
         Check(
@@ -104,10 +118,41 @@ def verify_process(p: ProcessDefinition, trace: ExecutionTrace | None) -> Verifi
             if allowed and b not in allowed and b != a:
                 bad_edges.append(f"{a} -> {b} (model allows {sorted(allowed)})")
     checks.append(Check("path_follows_model", not bad_edges, "; ".join(bad_edges)))
+    # Decision outcomes: the rule the org evaluated true must be the branch the model
+    # says leads to the next visited element (or the default when none was true).
+    if trace.rule_results:
+        bad_branches = []
+        for a, b in pairwise(visited):
+            sa = steps.get(a)
+            if sa is None or sa.kind is not StepKind.DECISION:
+                continue
+            true_rules = [br for br in sa.branches if trace.rule_results.get(br.name) is True]
+            expected = true_rules[0].next if true_rules else sa.default_next
+            if expected and expected != b:
+                bad_branches.append(
+                    f"{a}: org took {b}, model says {expected} "
+                    f"({'rule ' + true_rules[0].name if true_rules else 'default'})"
+                )
+        checks.append(Check("branch_outcomes_match", not bad_branches, "; ".join(bad_branches)))
+    # Action targets: FlowActionCall detail names the Apex class / email alert invoked.
+    if trace.action_targets:
+        bad_targets = []
+        for el, (atype, target) in trace.action_targets.items():
+            s_ = steps.get(el)
+            if s_ is None or not s_.target:
+                continue
+            if target.lower() != s_.target.lower() and not target.lower().endswith(
+                "." + s_.target.lower()
+            ):
+                bad_targets.append(f"{el}: org called {atype} {target}, model says {s_.target}")
+        checks.append(Check("action_targets_match", not bad_targets, "; ".join(bad_targets)))
     # Branch outcomes: a decision followed by X means one branch (or the default) leads to X.
     # DML: every DML op after a visited step must be a step of that kind on that object.
     dml_bad = []
+    nested_set = set(nested)
     for op in trace.dml:
+        if op.after_element in nested_set:
+            continue  # the subflow's DML is verified against the subflow
         want = _DML_KIND.get(op.op)
         s = steps.get(op.after_element or "")
         if want is None:
@@ -118,10 +163,36 @@ def verify_process(p: ProcessDefinition, trace: ExecutionTrace | None) -> Verifi
                 f"model has {s.kind.value + ' ' + str(s.object) if s else 'no such step'}"
             )
     checks.append(Check("dml_matches_steps", not dml_bad, "; ".join(dml_bad)))
+    model_ok = all(c.ok for c in checks)
     if trace.errors:
+        # The org stopped the interview (an unverified sender, a missing permission…):
+        # the path up to that element is still evidence about the model.
         checks.append(Check("no_runtime_errors", False, "; ".join(trace.errors)[:300]))
-    status = "pass" if all(c.ok for c in checks) else "mismatch"
+    status = (
+        "pass" if model_ok and not trace.errors else ("runtime_error" if model_ok else "mismatch")
+    )
     return VerificationResult(p.name, status, checks, visited)
+
+
+def explain_no_fire(p: ProcessDefinition, record: dict[str, Any]) -> str:
+    """Why a record-triggered flow may not have fired for ``record``: the entry
+    conditions the recipe does not satisfy (simple equality checks only)."""
+    unmet = []
+    for c in p.trigger.when.conditions:
+        if not c.left or c.expression:
+            continue
+        field = c.left.split(".", 1)[-1]
+        have = record.get(field)
+        op = (c.operator or "EqualTo").lower()
+        if (op == "equalto" and str(have) != str(c.right)) or (
+            op == "notequalto" and str(have) == str(c.right)
+        ):
+            unmet.append(f"{field} {c.operator} {c.right!r} (recipe has {have!r})")
+        elif op == "isnull" and (have is None) != (str(c.right).lower() == "true"):
+            unmet.append(f"{field} IsNull {c.right!r} (recipe has {have!r})")
+    if p.trigger.requires_change and not unmet:
+        unmet.append("flow requires the criteria to become true on update, not just hold")
+    return "; ".join(unmet) if unmet else "entry conditions look satisfied by the recipe"
 
 
 def compare_roundtrip(original: ExecutionTrace, copy: ExecutionTrace | None) -> Check:

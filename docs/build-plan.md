@@ -149,7 +149,9 @@ Three layers, added in the order a customer would ask for them:
 2. **Behavioural** — `offramp verify` (C26, `verify/`): drive the flow in the org under a debug trace and compare the visited elements, element kinds, transitions and DML with the definition. Offline mode takes a saved debug log. The comparer rejected the first hand-written trace because the path did not match the fixture flow's connectors, which is the point.
 3. **Round-trip** — `offramp verify --roundtrip`: `knowledge/flow_xml.py` renders a definition back to Flow XML (`kg show --format flowxml`), the copy is deployed as `<Name>_rt` and must trace identically. Every full-fidelity fixture flow re-extracts to the same definition from its rendered XML.
 
-Live runs of 2 and 3 wait for the org's request window (recipes in `config/verify_recipes.example.json`).
+**Live results (2026-09-10, Developer Edition, recipes in `config/verify_recipes.example.json`):** both driven flows verified — `SendWelcomeEmail` (autolaunched) and `LeadRouting` (record-triggered): every visited element known to the model, element kinds, transitions, the decision's evaluated rule and taken branch, the Apex action target, the DML, and the subflow's nested elements all match; both round-trip copies deployed from rendered XML and traced identically (2 and 5 elements). Both report `runtime_error`, not `pass`, because the org's Default Workflow User email is unverified so the email alert fails — an org setting, not a model defect. The runs also found a real defect in the fixture: an after-save flow calling Apex that makes a synchronous callout, which Salesforce rejects on every save (fixed with a Queueable). The parser's log format, written from memory, needed four corrections from real logs (see CLAUDE.md pitfall 29). Scan cost after the surface skip: ~360 requests (was ~600); cross-check 76 matched / 1 API-only.
+
+Next for validation: a static check for the after-save-flow → callout-Apex hazard; recipes generated from the schema (required fields) instead of hand-written; verifying the Easy Spaces flows (screen flows need a user).
 
 ## Known limitations (tracked, not yet scheduled)
 

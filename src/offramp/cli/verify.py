@@ -18,10 +18,11 @@ from offramp.verify.compare import (
     Check,
     VerificationResult,
     compare_roundtrip,
+    explain_no_fire,
     find_trace,
     verify_process,
 )
-from offramp.verify.runner import Recipe, deploy_roundtrip_copy, run_with_trace
+from offramp.verify.runner import Recipe, deploy_roundtrip_copy, remove_flow_copy, run_with_trace
 from offramp.verify.trace import parse_debug_log
 
 log = get_logger(__name__)
@@ -53,8 +54,23 @@ def add_verify_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
         help="Also render each definition back to Flow XML, deploy it as <Name>_rt, and require "
         "the copy to take the same path with the same DML as the original.",
     )
+    p.add_argument(
+        "--keep-copies", action="store_true", help="Leave the <Name>_rt copies in the org."
+    )
+    p.add_argument(
+        "--save-logs", type=Path, help="Directory to write each raw Apex debug log into."
+    )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=_run)
+
+
+def _salesforce_message(exc: BaseException) -> str:
+    """``errorCode: message`` from a simple-salesforce error, else the exception text."""
+    content = getattr(exc, "content", None)
+    if isinstance(content, list) and content and isinstance(content[0], dict):
+        first = content[0]
+        return f"{first.get('errorCode', '')}: {str(first.get('message', ''))[:400]}"
+    return str(exc)[:400]
 
 
 def load_processes(extract_dir: Path, names: list[str]) -> list[ProcessDefinition]:
@@ -81,16 +97,24 @@ def _print(results: list[VerificationResult], as_json: bool) -> None:
             print(f"    {mark} {c.name:<20} {c.detail}")
         if r.path:
             print(f"    path: {' > '.join(r.path)}")
-    counts = {
-        s: sum(1 for r in results if r.status == s) for s in ("pass", "mismatch", "not_verifiable")
-    }
+    statuses = ("pass", "runtime_error", "mismatch", "not_verifiable")
+    counts = {s: sum(1 for r in results if r.status == s) for s in statuses}
     print(
-        f"verified: {counts['pass']} pass, {counts['mismatch']} mismatch, {counts['not_verifiable']} not verifiable"
+        f"verified: {counts['pass']} pass, {counts['runtime_error']} runtime error (path matched, "
+        f"org stopped the interview), {counts['mismatch']} mismatch, "
+        f"{counts['not_verifiable']} not verifiable"
     )
 
 
 def _run(args: argparse.Namespace) -> int:
-    processes = load_processes(args.extract_dir, args.flow)
+    recipes_names: list[str] = []
+    if args.recipes and not args.flow:
+        # Recipes name the flows to verify; everything else in the org (including
+        # Salesforce-shipped flows) is out of scope, never invoked, never copied.
+        recipes_names = [
+            k for k in json.loads(args.recipes.read_text(encoding="utf-8")) if not k.startswith("_")
+        ]
+    processes = load_processes(args.extract_dir, args.flow or recipes_names)
     if not processes:
         log.error("cli.verify.no_flows", extract_dir=str(args.extract_dir))
         return 2
@@ -100,7 +124,7 @@ def _run(args: argparse.Namespace) -> int:
     else:
         results = asyncio.run(_run_org(args, processes))
     _print(results, args.json)
-    return 0 if all(r.status != "mismatch" for r in results) else 1
+    return 0 if all(r.status != "mismatch" for r in results) else 1  # runtime errors are the org's
 
 
 async def _run_org(
@@ -146,7 +170,21 @@ async def _run_org(
                     log.error(
                         "cli.verify.roundtrip_render_failed", process=p.name, error=str(exc)[:200]
                     )
-            outcome = await run_with_trace(gateway, p, recipe, user_id=user_id)
+            try:
+                outcome = await run_with_trace(
+                    gateway,
+                    p,
+                    recipe,
+                    user_id=user_id,
+                    also_invoke=[deployed_copy] if deployed_copy else None,
+                )
+            except Exception as exc:  # one flow's failure must not end the run
+                msg = _salesforce_message(exc)
+                log.error("cli.verify.run_failed", process=p.name, error=msg)
+                results.append(
+                    VerificationResult(p.name, "not_verifiable", [Check("trace_found", False, msg)])
+                )
+                continue
             if not outcome.log_text:
                 results.append(
                     VerificationResult(
@@ -156,18 +194,51 @@ async def _run_org(
                     )
                 )
                 continue
+            if args.save_logs and outcome.log_text:
+                args.save_logs.mkdir(parents=True, exist_ok=True)
+                (args.save_logs / f"{p.name}.log").write_text(outcome.log_text, encoding="utf-8")
             traces = parse_debug_log(outcome.log_text)
             original = find_trace(p, traces)
             result = verify_process(p, original)
+            if original is None and recipe.create:
+                result.checks.append(
+                    Check("entry_conditions", False, explain_no_fire(p, recipe.create))
+                )
             if args.roundtrip:
                 if deployed_copy is None:
                     result.checks.append(Check("roundtrip_copy_ran", False, "copy not deployed"))
                 elif original is not None:
                     copy_label = f"{p.label or p.name} (rt)".lower()
                     copy = next((t for t in traces if t.flow_label.lower() == copy_label), None)
-                    result.checks.append(compare_roundtrip(original, copy))
-                if any(not c.ok for c in result.checks) and result.status == "pass":
+                    if copy is None and original.errors:
+                        # The original's error rolled the transaction back before the
+                        # copy could run (record-triggered flows share the save).
+                        result.checks.append(
+                            Check(
+                                "roundtrip_copy_ran",
+                                True,
+                                "skipped: the original interview errored",
+                            )
+                        )
+                    else:
+                        result.checks.append(compare_roundtrip(original, copy))
+                if result.status in {"pass", "runtime_error"} and any(
+                    not c.ok for c in result.checks if c.name != "no_runtime_errors"
+                ):
                     result.status = "mismatch"
+                if deployed_copy and not getattr(args, "keep_copies", False):
+                    try:
+                        await remove_flow_copy(gateway, deployed_copy)
+                    except Exception as exc:
+                        log.warning(
+                            "cli.verify.copy_cleanup_failed",
+                            copy=deployed_copy,
+                            error=str(exc)[-200:],
+                        )
+            if outcome.note:
+                result.checks.append(Check("run_note", True, outcome.note))  # informational
+                if result.status == "pass":
+                    result.status = "runtime_error"
             results.append(result)
         return results
     finally:

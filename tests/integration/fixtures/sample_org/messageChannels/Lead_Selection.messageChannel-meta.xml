@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LightningMessageChannel xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Selected lead, published by leadCard and consumed by its Aura wrapper.</description>
+    <isExposed>false</isExposed>
+    <lightningMessageFields>
+        <description>Lead record Id</description>
+        <fieldName>leadId</fieldName>
+    </lightningMessageFields>
+    <masterLabel>Lead Selection</masterLabel>
+</LightningMessageChannel>

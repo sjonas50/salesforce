@@ -93,7 +93,7 @@ async def test_runner_creates_trace_flag_fires_record_and_cleans_up() -> None:
     backend.tooling["DebugLevel"] = []
     backend.records["User"] = {"005000000000001": {"Id": "005000000000001", "Username": "u@x"}}
     backend.records["ApexLog"] = {"07L000000000001": {"Id": "07L000000000001"}}
-    backend.responses[("GET", "sobjects/ApexLog/07L000000000001/Body")] = LOG
+    backend.responses[("GET", "sobjects/ApexLog/07L000000000001/Body")] = LOG  # served as text
     gateway = MCPGateway(backend=backend, engram=InMemoryEngramClient())
     outcome = await run_with_trace(
         gateway,
@@ -151,3 +151,97 @@ def test_roundtrip_comparison_of_two_traces() -> None:
     diverged = parse_debug_log(copy_log.replace("FlowActionCall|ScoreLead\n", ""))[0]
     assert not compare_roundtrip(original, diverged).ok
     assert not compare_roundtrip(original, None).ok
+
+
+@pytest.mark.asyncio
+async def test_remove_flow_copy_deactivates_then_deletes_versions() -> None:
+    from offramp.verify.runner import remove_flow_copy
+
+    backend = InMemorySalesforceBackend()
+    backend.tooling["FlowDefinition"] = [{"Id": "300X", "DeveloperName": "LeadRouting_rt"}]
+    backend.tooling["Flow"] = [
+        {"Id": "301A", "DefinitionId": "300X"},
+        {"Id": "301B", "DefinitionId": "300X"},
+    ]
+    gateway = MCPGateway(backend=backend, engram=InMemoryEngramClient())
+    assert await remove_flow_copy(gateway, "LeadRouting_rt") == 2
+    ops = [(m, path) for m, path, _ in backend.requests]
+    assert ("PATCH", "tooling/sobjects/FlowDefinition/300X") in ops
+    assert ("DELETE", "tooling/sobjects/Flow/301A") in ops and (
+        "DELETE",
+        "tooling/sobjects/Flow/301B",
+    ) in ops
+
+
+def test_runtime_error_is_its_own_status_and_no_fire_is_explained() -> None:
+    from offramp.verify.compare import explain_no_fire
+
+    procs = _processes()
+    p = procs["LeadRouting"]
+    errored = LOG.replace(
+        "FLOW_ELEMENT_BEGIN|3f2a0000-0000-0000-0000-000000000001|FlowSubflow|NotifyOwner",
+        "FLOW_ELEMENT_BEGIN|3f2a0000-0000-0000-0000-000000000001|FlowSubflow|NotifyOwner\n"
+        "12:00:01.116 (1116000)|FLOW_ELEMENT_ERROR|Default Workflow User Email has not been verified.",
+    )
+    r = verify_process(p, find_trace(p, parse_debug_log(errored)))
+    assert r.status == "runtime_error" and any(c.name == "no_runtime_errors" for c in r.checks)
+    why = explain_no_fire(p, {"Status": "Working - Contacted", "Country__c": "US"})
+    assert "Status EqualTo" in why and "Working - Contacted" in why
+
+
+def test_subflow_elements_are_nested_not_unknown() -> None:
+    procs = _processes()
+    p = procs["LeadRouting"]
+    nested = LOG.replace(
+        "FLOW_ELEMENT_BEGIN|3f2a0000-0000-0000-0000-000000000001|FlowSubflow|NotifyOwner",
+        "FLOW_ELEMENT_BEGIN|3f2a0000-0000-0000-0000-000000000001|FlowSubflow|NotifyOwner\n"
+        "12:00:01.116 (1116000)|FLOW_ELEMENT_BEGIN|3f2a0000-0000-0000-0000-000000000001|FlowRecordLookup|GetLead\n"
+        "12:00:01.117 (1117000)|FLOW_ELEMENT_BEGIN|3f2a0000-0000-0000-0000-000000000001|FlowActionCall|SendEmail",
+    )
+    r = verify_process(p, find_trace(p, parse_debug_log(nested)))
+    assert r.status == "pass", [c for c in r.checks if not c.ok]
+    assert any(c.name == "nested_elements" and "GetLead" in c.detail for c in r.checks)
+    assert r.path == ["RouteByCountry", "AssignOwner", "ScoreLead", "NotifyOwner"]
+
+
+REAL_SHAPE = """\
+17:29:49.479 (479473812)|FLOW_CREATE_INTERVIEW_BEGIN|00DdM00000qwHVZ|300dM00003xQXrG|301dM000049LE8q
+17:29:49.479 (479619083)|FLOW_CREATE_INTERVIEW_END|49867e9c-58e3|Lead Routing
+17:29:49.480 (480167514)|FLOW_START_INTERVIEWS_BEGIN|1
+17:29:49.480 (480199054)|FLOW_START_INTERVIEW_BEGIN|49867e9c-58e3|Lead Routing
+17:29:49.480 (481315196)|FLOW_ELEMENT_BEGIN|49867e9c-58e3|FlowDecision|RouteByCountry
+17:29:49.480 (481804347)|FLOW_ELEMENT_DEFERRED|FlowDecision|RouteByCountry
+17:29:49.480 (481964457)|FLOW_START_INTERVIEW_END|49867e9c-58e3|Lead Routing
+17:29:49.480 (482694049)|FLOW_RULE_DETAIL|49867e9c-58e3|IsUS|false|false
+17:29:49.480 (482909849)|FLOW_ELEMENT_BEGIN|49867e9c-58e3|FlowActionCall|ScoreLead
+17:29:49.480 (825819127)|FLOW_ACTIONCALL_DETAIL|49867e9c-58e3|ScoreLead|Apex|LeadScoringService|true|
+17:29:49.480 (826256308)|FLOW_ELEMENT_BEGIN|49867e9c-58e3|FlowSubflow|NotifyOwner
+17:29:49.480 (891107523)|FLOW_SUBFLOW_DETAIL|49867e9c-58e3|Send Welcome Email|300dM00003xQJN6|301dM000049L2aj
+17:29:49.480 (891446994)|FLOW_ELEMENT_BEGIN|49867e9c-58e3|FlowRecordLookup|GetLead
+17:29:49.480 (897531627)|FLOW_ELEMENT_BEGIN|49867e9c-58e3|FlowActionCall|SendEmail
+17:29:49.480 (988613927)|FLOW_ACTIONCALL_DETAIL|49867e9c-58e3|SendEmail|Email Alerts|Lead.Welcome_Lead_Alert|false|Default Workflow User
+17:29:49.480 (1252140329)|FLOW_ELEMENT_ERROR|Default Workflow User Email has not been verified.
+17:29:49.480 (1252470359)|FLOW_START_INTERVIEWS_END|1
+"""
+
+
+def test_real_log_shape_deferred_elements_rules_actions_and_late_error() -> None:
+    traces = parse_debug_log(REAL_SHAPE)
+    assert [t.flow_label for t in traces] == ["Lead Routing"]  # no phantom from CREATE_BEGIN
+    t = traces[0]
+    assert t.path == ["RouteByCountry", "ScoreLead", "NotifyOwner", "GetLead", "SendEmail"]
+    assert t.rule_results == {"IsUS": False}
+    assert t.action_targets["ScoreLead"] == ("Apex", "LeadScoringService")
+    assert t.subflow_calls == [("NotifyOwner", "Send Welcome Email")]
+    assert t.errors and t.errors[0].startswith("Default Workflow User Email")
+    p = _processes()["LeadRouting"]
+    r = verify_process(p, find_trace(p, traces))
+    assert r.status == "runtime_error", [c for c in r.checks if not c.ok]
+    names = {c.name: c for c in r.checks}
+    assert names["branch_outcomes_match"].ok and names["action_targets_match"].ok
+    assert names["nested_elements"].ok and "GetLead" in names["nested_elements"].detail
+    # A wrong branch in the model would be caught: pretend the default led elsewhere.
+    p2 = p.model_copy(deep=True)
+    next(s for s in p2.steps if s.id == "RouteByCountry").default_next = "AssignOwner"
+    r2 = verify_process(p2, find_trace(p2, traces))
+    assert not {c.name: c for c in r2.checks}["branch_outcomes_match"].ok

@@ -1,13 +1,28 @@
 {
-  "_comment": "offramp verify --org <alias> --from out/real_org/extract --recipes config/verify_recipes.example.json [--roundtrip]. One entry per flow API name: object + create (and optional update) for record-triggered flows, inputs for autolaunched flows. Records are deleted after the run.",
+  "_comment": "offramp verify --org <alias> --from out/real_org/extract --recipes config/verify_recipes.example.json [--roundtrip]. One entry per flow API name: object + create (and optional update) for record-triggered flows, inputs for autolaunched flows. Records are deleted after the run. Autolaunched flows may reference the created record as \"$record.Id\" in inputs. Scheduled and screen flows are not verifiable on demand.",
   "LeadRouting": {
     "object": "Lead",
-    "create": {"LastName": "Verify", "Company": "Offramp Verify", "Country__c": "US", "LeadSource": "Web", "Email": "verify@example.com", "Status": "Open - Not Contacted"}
+    "create": {
+      "LastName": "Verify",
+      "Company": "Offramp Verify",
+      "Country__c": "US",
+      "LeadSource": "Web",
+      "Email": "verify@example.com",
+      "Status": "Open - Not Contacted"
+    }
   },
   "SendWelcomeEmail": {
-    "inputs": {}
-  },
-  "NightlyHousekeeping": {
-    "inputs": {}
+    "object": "Lead",
+    "create": {
+      "LastName": "Verify",
+      "Company": "Offramp Verify",
+      "Country__c": "US",
+      "Email": "verify@example.com",
+      "Status": "Working - Contacted"
+    },
+    "inputs": {
+      "recordId": "$record.Id"
+    },
+    "_why": "Status keeps LeadRouting's entry condition false so only this flow runs on the record."
   }
 }

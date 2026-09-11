@@ -14,7 +14,7 @@
         <filters>
             <field>Status</field>
             <operator>EqualTo</operator>
-            <value><stringValue>Open</stringValue></value>
+            <value><stringValue>Open - Not Contacted</stringValue></value>
         </filters>
         <doesRequireRecordChangedToMeetCriteria>true</doesRequireRecordChangedToMeetCriteria>
         <connector><targetReference>RouteByCountry</targetReference></connector>

@@ -44,6 +44,7 @@ class SalesforceBackend(Protocol):
     async def tooling_query(self, soql: str) -> dict[str, Any]: ...
     async def restful(self, path: str, params: dict[str, Any] | None = None) -> Any: ...
     async def request(self, method: str, path: str, json: Any | None = None) -> Any: ...
+    async def get_text(self, path: str) -> str: ...
     async def mdapi_retrieve(self, unpackaged: dict[str, list[str]]) -> bytes: ...
     async def mdapi_deploy(self, zip_bytes: bytes) -> dict[str, Any]: ...
     async def mdapi_list(self, metadata_type: str, folder: str | None = None) -> list[str]: ...
@@ -156,6 +157,12 @@ class InMemorySalesforceBackend:
             }
         return {}
 
+    async def get_text(self, path: str) -> str:
+        """Raw (non-JSON) GET such as an ApexLog body: ``responses[("GET", path)]``."""
+        self.requests.append(("GET", path, None))
+        v = self.responses.get(("GET", path), "")
+        return v if isinstance(v, str) else str(v)
+
     async def request(self, method: str, path: str, json: Any | None = None) -> Any:
         """Canned non-GET REST/Tooling calls: ``responses[(METHOD, path)]``; every call is
         appended to ``requests`` so tests can assert what the runner did."""
@@ -258,6 +265,14 @@ class MCPGateway:
         result = await self.backend.restful(path, params)
         await self.engram.anchor(self.component, {"tool": "sf_restful", "path": path})
         return result
+
+    async def sf_get_text(self, path: str) -> str:
+        """Raw GET returning text (ApexLog bodies are plain text, not JSON)."""
+        text = await self.backend.get_text(path)
+        await self.engram.anchor(
+            self.component, {"tool": "sf_get_text", "path": path, "bytes": len(text)}
+        )
+        return text
 
     async def sf_request(self, method: str, path: str, json: Any | None = None) -> Any:
         """Non-GET REST / Tooling call (create a TraceFlag, invoke a flow action, ...)."""

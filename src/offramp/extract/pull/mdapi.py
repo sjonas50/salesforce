@@ -186,6 +186,13 @@ _META_ONLY_SUFFIXES = (
     ".group",
     ".role",
     ".namedCredential",
+    ".tab",
+    ".app",
+    ".pathAssistant",
+    ".messageChannel",
+    ".customPermission",
+    ".quickAction",
+    ".globalValueSet",
 )
 
 

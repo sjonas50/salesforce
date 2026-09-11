@@ -350,6 +350,13 @@ def test_metadata_api_files_are_renamed_to_source_format() -> None:
     assert _source_format_name("reports/Pipeline/Pipeline_by_Segment.report") == (
         "reports/Pipeline/Pipeline_by_Segment.report-meta.xml"
     )
+    assert _source_format_name("tabs/Lead_Intake.tab") == "tabs/Lead_Intake.tab-meta.xml"
+    assert _source_format_name("applications/Sales_Offramp.app") == (
+        "applications/Sales_Offramp.app-meta.xml"
+    )
+    assert _source_format_name("pathAssistants/Lead_Status_Path.pathAssistant") == (
+        "pathAssistants/Lead_Status_Path.pathAssistant-meta.xml"
+    )
     # already source format, or content files whose layout the two formats share
     assert _source_format_name("layouts/A-B.layout-meta.xml") == "layouts/A-B.layout-meta.xml"
     assert _source_format_name("classes/Foo.cls") == "classes/Foo.cls"

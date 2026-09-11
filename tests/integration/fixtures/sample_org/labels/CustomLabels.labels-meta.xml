@@ -7,4 +7,11 @@
         <shortDescription>Lead email required</shortDescription>
         <value>Web leads must have an email address.</value>
     </labels>
+    <labels>
+        <fullName>Capture_Lead</fullName>
+        <language>en_US</language>
+        <protected>false</protected>
+        <shortDescription>Capture Lead</shortDescription>
+        <value>Capture lead</value>
+    </labels>
 </CustomLabels>

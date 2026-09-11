@@ -71,6 +71,11 @@ class ExecutionTrace:
     dml: list[DmlOp] = field(default_factory=list)
     assignments: dict[str, str] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    rule_results: dict[str, bool] = field(default_factory=dict)  # decision rule -> evaluated
+    action_targets: dict[str, tuple[str, str]] = field(
+        default_factory=dict
+    )  # element -> (type, target)
+    subflow_calls: list[tuple[str, str]] = field(default_factory=list)  # (after element, label)
 
     @property
     def path(self) -> list[str]:
@@ -78,61 +83,76 @@ class ExecutionTrace:
 
 
 def parse_debug_log(text: str) -> list[ExecutionTrace]:
-    """Every flow interview in one debug log, in start order."""
+    """Every flow interview in one debug log, in start order.
+
+    Real logs (confirmed on a Developer Edition, API 66): ``FLOW_CREATE_INTERVIEW_END``
+    carries ``id|label`` (the ``_BEGIN`` line carries ids only); ``FLOW_START_INTERVIEW_END``
+    arrives right after the first element because the rest run *deferred*, so
+    lines without an interview id (``FLOW_ELEMENT_ERROR``, ``DML_BEGIN``) belong to the
+    interview that most recently ran an element, not to a "current" one;
+    ``FLOW_RULE_DETAIL|id|rule|result|…`` gives decision outcomes and
+    ``FLOW_ACTIONCALL_DETAIL|id|element|type|target|success|…`` gives action targets;
+    a subflow's elements are logged under the parent's interview after
+    ``FLOW_SUBFLOW_DETAIL|id|label|…``.
+    """
     traces: list[ExecutionTrace] = []
     by_interview: dict[str, ExecutionTrace] = {}
-    current: ExecutionTrace | None = None
+    last: ExecutionTrace | None = None  # most recent interview that logged something
     order = 0
+
+    def get(iid: str | None, label: str = "") -> ExecutionTrace:
+        nonlocal last
+        t = by_interview.get(iid or "")
+        if t is None:
+            if iid and last is not None and not last.interview_id and last.flow_label == label:
+                t = last
+                t.interview_id = iid
+            else:
+                t = ExecutionTrace(flow_label=label, interview_id=iid or "")
+                traces.append(t)
+            if iid:
+                by_interview[iid] = t
+        last = t
+        return t
+
     for line in text.splitlines():
         m = _LINE_RE.match(line.strip())
         if not m:
             continue
         event, rest = m.group(1), m.group(2)
         parts = rest.split("|") if rest else []
-        if event in {"FLOW_START_INTERVIEW_BEGIN", "FLOW_CREATE_INTERVIEW_BEGIN"}:
-            iid = parts[0] if event == "FLOW_START_INTERVIEW_BEGIN" and parts else ""
-            label = parts[-1] if parts else ""
-            if event == "FLOW_CREATE_INTERVIEW_BEGIN":
-                # Precedes START_INTERVIEW_BEGIN for the same flow; keep the label only.
-                current = ExecutionTrace(flow_label=label)
-                traces.append(current)
-                continue
-            if current is not None and current.flow_label == label and not current.interview_id:
-                current.interview_id = iid
-            else:
-                current = ExecutionTrace(flow_label=label, interview_id=iid)
-                traces.append(current)
-            if iid:
-                by_interview[iid] = current
+        if event in {"FLOW_CREATE_INTERVIEW_END", "FLOW_START_INTERVIEW_BEGIN"} and len(parts) >= 2:
+            get(parts[0], parts[-1])
         elif event == "FLOW_ELEMENT_BEGIN" and len(parts) >= 3:
-            t = by_interview.get(parts[0]) or current
-            if t is not None:
-                order += 1
-                t.elements.append(TraceElement(name=parts[2], element_type=parts[1], order=order))
-        elif event == "FLOW_ELEMENT_ERROR":
-            t = by_interview.get(parts[0]) if parts else current
-            if t is not None:
-                msg = parts[-1] if parts else "error"
-                t.errors.append(msg)
-                if t.elements:
-                    t.elements[-1].error = msg
+            order += 1
+            get(parts[0]).elements.append(
+                TraceElement(name=parts[2], element_type=parts[1], order=order)
+            )
+        elif event == "FLOW_RULE_DETAIL" and len(parts) >= 3:
+            get(parts[0]).rule_results[parts[1]] = parts[2].strip().lower() == "true"
+        elif event == "FLOW_ACTIONCALL_DETAIL" and len(parts) >= 4:
+            get(parts[0]).action_targets[parts[1]] = (parts[2], parts[3])
+        elif event == "FLOW_SUBFLOW_DETAIL" and len(parts) >= 2:
+            t = get(parts[0])
+            t.subflow_calls.append((t.elements[-1].name if t.elements else "", parts[1]))
         elif event == "FLOW_VALUE_ASSIGNMENT" and len(parts) >= 3:
-            t = by_interview.get(parts[0]) or current
-            if t is not None:
-                t.assignments[parts[1]] = parts[2]
+            get(parts[0]).assignments[parts[1]] = parts[2]
+        elif event == "FLOW_ELEMENT_ERROR":
+            owner = (by_interview.get(parts[0]) if parts else None) or last
+            if owner is not None:
+                msg = parts[-1] if parts else "error"
+                owner.errors.append(msg)
+                if owner.elements:
+                    owner.elements[-1].error = msg
         elif event == "DML_BEGIN":
             dm = _DML_RE.search(rest)
-            if dm and current is not None:
-                current.dml.append(
+            if dm and last is not None:
+                last.dml.append(
                     DmlOp(
                         op=dm.group(1),
                         sobject=dm.group(2),
                         rows=int(dm.group(3)),
-                        after_element=current.elements[-1].name if current.elements else None,
+                        after_element=last.elements[-1].name if last.elements else None,
                     )
                 )
-        elif event == "FLOW_START_INTERVIEW_END" and parts:
-            done = by_interview.get(parts[0])
-            if done is current:
-                current = None
     return traces

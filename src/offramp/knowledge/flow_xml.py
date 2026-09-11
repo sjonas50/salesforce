@@ -173,8 +173,7 @@ def _render_step(s: Step, y: int) -> str:
                         indent=i,
                     )
                 )
-        parts.append(_el("object", s.object or "", indent=i))
-        if k is StepKind.LOOKUP:
+        if k is StepKind.LOOKUP:  # schema order: getFirstRecordOnly < object < queriedFields
             parts.append(
                 _el(
                     "getFirstRecordOnly",
@@ -182,6 +181,8 @@ def _render_step(s: Step, y: int) -> str:
                     indent=i,
                 )
             )
+        parts.append(_el("object", s.object or "", indent=i))
+        if k is StepKind.LOOKUP:
             filter_fields = {c.left for c in (s.when.conditions if s.when else [])}
             for f in s.fields:
                 if f not in filter_fields:
@@ -304,13 +305,22 @@ def _render_step(s: Step, y: int) -> str:
 
 
 def _start(p: ProcessDefinition, y: int) -> str:
+    """``<start>`` in Metadata API schema order: connector, doesRequireRecordChanged…,
+    filterFormula | filterLogic + filters, object, recordTriggerType, schedule, triggerType.
+    Salesforce reads the XML in that order; ``object`` after ``schedule`` deploys as
+    "object set but no filters"."""
     t = p.trigger
     i = 2
     parts = [_el("locationX", 50, indent=i), _el("locationY", y, indent=i)]
     parts += _connector("connector", p.entry, i)
-    # Entry conditions apply to record-triggered and scheduled flows alike.
-    if t.kind in {TriggerKind.RECORD_SAVE, TriggerKind.RECORD_DELETE, TriggerKind.SCHEDULED}:
-        if t.when.conditions and not any(c.expression for c in t.when.conditions):
+    record = t.kind in {TriggerKind.RECORD_SAVE, TriggerKind.RECORD_DELETE}
+    triggered = record or t.kind is TriggerKind.SCHEDULED
+    if record and t.requires_change:
+        parts.append(_el("doesRequireRecordChangedToMeetCriteria", "true", indent=i))
+    if triggered and t.when.conditions:
+        if any(c.expression for c in t.when.conditions):
+            parts.append(_el("filterFormula", t.when.conditions[0].expression or "", indent=i))
+        else:
             parts.append(_el("filterLogic", t.when.logic or "and", indent=i))
             for c in t.when.conditions:
                 parts.append(
@@ -323,10 +333,9 @@ def _start(p: ProcessDefinition, y: int) -> str:
                         indent=i,
                     )
                 )
-        elif t.when.conditions:
-            parts.append(_el("filterFormula", t.when.conditions[0].expression or "", indent=i))
-    if t.kind in {TriggerKind.RECORD_SAVE, TriggerKind.RECORD_DELETE}:
-        parts.append(_el("object", t.object or "", indent=i))
+    if t.object and t.kind is not TriggerKind.INVOCATION:
+        parts.append(_el("object", t.object, indent=i))
+    if record:
         rtt = {
             ("create",): "Create",
             ("update",): "Update",
@@ -334,19 +343,7 @@ def _start(p: ProcessDefinition, y: int) -> str:
             ("delete",): "Delete",
         }.get(tuple(t.events), "CreateAndUpdate")
         parts.append(_el("recordTriggerType", rtt, indent=i))
-        if t.requires_change:
-            parts.append(_el("doesRequireRecordChangedToMeetCriteria", "true", indent=i))
-        parts.append(
-            _el(
-                "triggerType",
-                "RecordBeforeSave" if t.timing == "before" else "RecordAfterSave",
-                indent=i,
-            )
-        )
-    elif t.kind is TriggerKind.PLATFORM_EVENT:
-        parts.append(_el("object", t.object or "", indent=i))
-        parts.append(_el("triggerType", "PlatformEvent", indent=i))
-    elif t.kind is TriggerKind.SCHEDULED:
+    if t.kind is TriggerKind.SCHEDULED:
         sched = t.schedule or {}
         parts.append(
             _el(
@@ -358,8 +355,17 @@ def _start(p: ProcessDefinition, y: int) -> str:
                 indent=i,
             )
         )
-        if t.object:
-            parts.append(_el("object", t.object, indent=i))
+    if record:
+        parts.append(
+            _el(
+                "triggerType",
+                "RecordBeforeSave" if t.timing == "before" else "RecordAfterSave",
+                indent=i,
+            )
+        )
+    elif t.kind is TriggerKind.PLATFORM_EVENT:
+        parts.append(_el("triggerType", "PlatformEvent", indent=i))
+    elif t.kind is TriggerKind.SCHEDULED:
         parts.append(_el("triggerType", "Scheduled", indent=i))
     return _el("start", None, *parts, indent=1)
 
