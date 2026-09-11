@@ -43,10 +43,9 @@ def read_cmt_records_from_source(roots: list[Path]) -> list[CMTRecord]:
 
     out: list[CMTRecord] = []
     for root in roots:
-        d = root / "customMetadata"
-        if not d.is_dir():
-            continue
-        for path in sorted(d.glob("*.md-meta.xml")):
+        for path in sorted(root.glob("**/customMetadata/*.md-meta.xml")):
+            if {".git", "node_modules", ".sfdx", ".sf"} & set(path.parts):
+                continue
             stem = path.name[: -len(".md-meta.xml")]
             if "." not in stem:
                 continue

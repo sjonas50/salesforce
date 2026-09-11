@@ -350,3 +350,14 @@ def test_cmt_records_are_configuration_nodes(graph: DependencyGraph, run: Extrac
     assert "Trigger_Action__mdt" in targets and "LeadValidationHandler" in targets
     readers = {graph.node(str(e.source_id)).api_name for e in graph.inbound(row.id)}  # type: ignore[union-attr]
     assert "MetadataTriggerHandler" in readers  # it queries Trigger_Action__mdt
+
+
+def test_foreign_namespace_fields_become_package_dependencies() -> None:
+    """A source tree referencing npe01__X__c depends on an installed package; not a gap."""
+    from offramp.understand.dependencies import _looks_like_class, _namespace_of
+
+    assert _namespace_of("npo02__Household__c") == "npo02"
+    assert _namespace_of("npe01__OppPayment__c") == "npe01"
+    assert _namespace_of("Score__c") is None
+    assert not _looks_like_class("START_DATE") and not _looks_like_class("RD_AMOUNT")
+    assert _looks_like_class("LeadRoutingHandler")

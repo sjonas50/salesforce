@@ -6,10 +6,17 @@
 help:  ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-dev: sync hooks falkordb  ## Full developer setup: install deps + git hooks + local FalkorDB.
+dev: sync hooks apex-parser falkordb  ## Full developer setup: install deps + git hooks + Apex grammar + local FalkorDB.
 
 sync:  ## Install/update Python dependencies.
 	uv sync --all-extras --group dev
+
+apex-parser: tools/apex-parser/node_modules/@apexdevtools/apex-parser  ## Install the grammar-backed Apex parser (Node); the tokenizer is the fallback without it.
+
+tools/apex-parser/node_modules/@apexdevtools/apex-parser: tools/apex-parser/package.json tools/apex-parser/package-lock.json
+	@command -v npm >/dev/null || { echo "npm missing: install Node (brew install node)"; exit 1; }
+	cd tools/apex-parser && npm ci --no-audit --no-fund
+	@touch $@
 
 hooks:  ## Install pre-commit git hooks.
 	uv run pre-commit install --install-hooks

@@ -1,0 +1,16 @@
+{
+  "name": "offramp-apex-parser",
+  "version": "1.0.0",
+  "description": "Off-Ramp Apex AST emitter over Salesforce's ANTLR grammar (@apexdevtools/apex-parser); see apex_ast.js",
+  "main": "apex_ast.js",
+  "scripts": {
+    "version": "node apex_ast.js --version"
+  },
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "dependencies": {
+    "@apexdevtools/apex-parser": "^5.2.0",
+    "antlr4": "^4.13.2"
+  },
+  "private": true
+}

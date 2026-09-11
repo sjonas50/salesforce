@@ -1,8 +1,32 @@
-"""C20 Apex analyzer: references, SOQL, DML, callouts, entry points."""
+"""C20 Apex analyzer: references, SOQL, DML, callouts, entry points.
+
+Every case runs against both engines (tokenizer, grammar-backed AST) so the
+contract stays identical; the AST engine is skipped when Node is missing.
+"""
 
 from __future__ import annotations
 
-from offramp.extract.apex import analyze
+from collections.abc import Callable
+
+import pytest
+
+from offramp.extract.apex import ApexAnalysis, analyze, ast_bridge
+
+ENGINES = ["tokenizer"] + (["ast"] if ast_bridge.is_available() else [])
+Analyze = Callable[..., ApexAnalysis]
+
+
+@pytest.fixture(params=ENGINES)
+def analyze_with(request: pytest.FixtureRequest) -> Analyze:
+    engine = str(request.param)
+
+    def _run(source: str, *, name_hint: str | None = None) -> ApexAnalysis:
+        a = analyze(source, name_hint=name_hint, engine=engine)
+        assert a.engine == engine
+        return a
+
+    return _run
+
 
 HANDLER = """
 public with sharing class LeadRoutingHandler implements TriggerAction {
@@ -30,8 +54,8 @@ public with sharing class LeadRoutingHandler implements TriggerAction {
 """
 
 
-def test_header_and_entry_points() -> None:
-    a = analyze(HANDLER)
+def test_header_and_entry_points(analyze_with: Analyze) -> None:
+    a = analyze_with(HANDLER)
     assert a.name == "LeadRoutingHandler"
     assert a.kind == "class"
     assert a.sharing == "with"
@@ -39,8 +63,10 @@ def test_header_and_entry_points() -> None:
     assert "trigger_handler" in a.entry_points
 
 
-def test_class_references_exclude_comments_strings_and_platform_types() -> None:
-    a = analyze(HANDLER)
+def test_class_references_exclude_comments_strings_and_platform_types(
+    analyze_with: Analyze,
+) -> None:
+    a = analyze_with(HANDLER)
     assert "LeadScoringService" in a.class_references
     assert "CleanupNotifier" in a.class_references
     assert "TriggerAction" in a.class_references
@@ -52,8 +78,8 @@ def test_class_references_exclude_comments_strings_and_platform_types() -> None:
     assert "LeadScoringService.score" in a.method_calls
 
 
-def test_soql_and_fields() -> None:
-    a = analyze(HANDLER)
+def test_soql_and_fields(analyze_with: Analyze) -> None:
+    a = analyze_with(HANDLER)
     assert len(a.soql) == 1
     q = a.soql[0]
     assert q.sobject == "Territory__c"
@@ -68,8 +94,8 @@ def test_soql_and_fields() -> None:
     assert {"Lead", "Territory__c", "Cleanup_Settings__c"} <= set(a.sobject_references)
 
 
-def test_dml_callouts_async_dynamic() -> None:
-    a = analyze(HANDLER)
+def test_dml_callouts_async_dynamic(analyze_with: Analyze) -> None:
+    a = analyze_with(HANDLER)
     assert [(d.op, d.sobject, d.via_database_class) for d in a.dml] == [("update", "Lead", True)]
     assert a.callouts == ["HttpRequest"]
     assert a.named_credentials == ["ScoringAPI"]
@@ -81,8 +107,8 @@ def test_dml_callouts_async_dynamic() -> None:
     assert a.custom_settings == ["Cleanup_Settings__c"]
 
 
-def test_trigger_header() -> None:
-    a = analyze(
+def test_trigger_header(analyze_with: Analyze) -> None:
+    a = analyze_with(
         "trigger LeadDispatcher on Lead (before insert, after update) { MetadataTriggerHandler.run(); }"
     )
     assert a.kind == "trigger"
@@ -92,7 +118,7 @@ def test_trigger_header() -> None:
     assert "trigger" in a.entry_points
 
 
-def test_batchable_schedulable_and_dynamic_soql() -> None:
+def test_batchable_schedulable_and_dynamic_soql(analyze_with: Analyze) -> None:
     src = """
     global class Nightly implements Database.Batchable<SObject>, Schedulable {
         global Database.QueryLocator start(Database.BatchableContext bc) {
@@ -103,7 +129,7 @@ def test_batchable_schedulable_and_dynamic_soql() -> None:
         global void execute(SchedulableContext sc) {}
     }
     """
-    a = analyze(src)
+    a = analyze_with(src)
     assert {"batchable", "schedulable"} <= set(a.entry_points)
     q = next(x for x in a.soql if x.dynamic)
     assert q.sobject == "Lead"
@@ -113,7 +139,7 @@ def test_batchable_schedulable_and_dynamic_soql() -> None:
     assert "Schedulable" not in a.class_references
 
 
-def test_annotations_mark_entry_points() -> None:
+def test_annotations_mark_entry_points(analyze_with: Analyze) -> None:
     src = """
     public with sharing class Svc {
         @AuraEnabled(cacheable=true) public static Lead get(Id i) { return [SELECT Id FROM Lead WHERE Id = :i]; }
@@ -121,14 +147,12 @@ def test_annotations_mark_entry_points() -> None:
         @future(callout=true) public static void later() {}
     }
     """
-    a = analyze(src)
+    a = analyze_with(src)
     assert {"aura_enabled", "invocable", "future"} <= set(a.entry_points)
 
 
-def test_lowercase_qualifiers_are_candidate_class_references() -> None:
+def test_lowercase_qualifiers_are_candidate_class_references(analyze_with: Analyze) -> None:
     """Apex is case-insensitive: ``customerServices.get()`` may be a static call on CustomerServices."""
-    from offramp.extract.apex import analyze
-
     src = """@isTest
     public class CustomerServicesTest {
         @isTest static void t() {
@@ -137,8 +161,28 @@ def test_lowercase_qualifiers_are_candidate_class_references() -> None:
             String s = name.toLowerCase();
         }
     }"""
-    a = analyze(src, name_hint="CustomerServicesTest")
+    a = analyze_with(src, name_hint="CustomerServicesTest")
     assert "customerServices" in a.candidate_class_references
     assert "testDataFactory" in a.candidate_class_references
     assert "name" in a.candidate_class_references  # a variable; the builder drops it
     assert "CustomerServices" not in a.class_references  # never claimed outright
+
+
+def test_code_defined_dispatch_table_rows_are_extracted(analyze_with: Analyze) -> None:
+    """NPSP/EDA register trigger handlers in Apex, not metadata (TDTM_DefaultConfig)."""
+    src = """public class TDTM_DefaultConfig {
+        public static List<Trigger_Handler__c> getDefaultRecords() {
+            List<Trigger_Handler__c> handlers = new List<Trigger_Handler__c>();
+            handlers.add(new Trigger_Handler__c(Active__c = true, Asynchronous__c = false,
+                  Class__c = 'AFFL_Affiliations_TDTM', Load_Order__c = 2, Object__c = 'Account',
+                  Trigger_Action__c = 'AfterInsert;AfterUpdate'));
+            handlers.add(new Lead(LastName = 'x'));
+            return handlers;
+        }
+    }"""
+    a = analyze_with(src, name_hint="TDTM_DefaultConfig")
+    assert len(a.dispatch_rows) == 1
+    row = a.dispatch_rows[0]
+    assert row["sobject"] == "Trigger_Handler__c"
+    assert row["Class__c"] == "AFFL_Affiliations_TDTM" and row["Object__c"] == "Account"
+    assert row["Trigger_Action__c"] == "AfterInsert;AfterUpdate" and row["Active__c"] == "true"

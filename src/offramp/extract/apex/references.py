@@ -85,6 +85,103 @@ STANDARD_SOBJECTS: frozenset[str] = frozenset(
         "address",
         "producttemplate",
         "businesshours",
+        "opportunitystage",
+        "campaignmemberstatus",
+        "casestatus",
+        "contractstatus",
+        "leadstatus",
+        "taskstatus",
+        "taskpriority",
+        "solutionstatus",
+        "partnerrole",
+        "fieldpermissions",
+        "objectpermissions",
+        "setupentityaccess",
+        "permissionsetgroup",
+        "permissionsetgroupcomponent",
+        "permissionsetlicense",
+        "userlicense",
+        "custompermission",
+        "customnotificationtype",
+        "duplicaterecorditem",
+        "duplicaterecordset",
+        "duplicaterule",
+        "matchingrule",
+        "duplicatejob",
+        "contentdistribution",
+        "contentworkspace",
+        "contentnote",
+        "contentfolder",
+        "entitydefinition",
+        "fielddefinition",
+        "entityparticle",
+        "emailmessagerelation",
+        "emailservicesaddress",
+        "orgwideemailaddress",
+        "appmenuitem",
+        "platformcachepartition",
+        "cronjobdetail",
+        "flowinterview",
+        "flowdefinitionview",
+        "businessprocess",
+        "staticresource",
+        "apexpage",
+        "apexcomponent",
+        "apextestresult",
+        "authsession",
+        "loginhistory",
+        "setupaudittrail",
+        "connectedapplication",
+        "namedcredential",
+        "externaldatasource",
+        "listview",
+        "entitysubscription",
+        "feedcomment",
+        "feedattachment",
+        "topicassignment",
+        "dashboardcomponent",
+        "accountshare",
+        "contactshare",
+        "leadshare",
+        "opportunityshare",
+        "caseshare",
+        "accounthistory",
+        "contacthistory",
+        "leadhistory",
+        "opportunityhistory",
+        "casehistory",
+        "opportunityfieldhistory",
+        "accountteammember",
+        "opportunityteammember",
+        "caseteammember",
+        "caseteamrole",
+        "useraccountteammember",
+        "campaigninfluence",
+        "opportunitycompetitor",
+        "contractcontactrole",
+        "accountcontactrole",
+        "contactpointaddress",
+        "contactpointemail",
+        "contactpointphone",
+        "macro",
+        "quicktext",
+        "livechattranscript",
+        "messagingsession",
+        "ownerchangeoption",
+        "recordaction",
+        "streamingchannel",
+        "platformeventusagemetric",
+        "sharingrecordcollection",
+        "usertermsofuseconsent",
+        "loginip",
+        "loginevent",
+        "eventlogfile",
+        "package2",
+        "installedsubscriberpackage",
+        "subscriberpackage",
+        "voicecall",
+        "calendar",
+        "calendarview",
         "holiday",
     }
 )
@@ -426,6 +523,49 @@ _SYSTEM_NAMESPACES = {
     "fieldset",
     "fieldsetmember",
     "userrecordaccess",
+    "stubprovider",
+    "jsontoken",
+    "jsongenerator",
+    "jsonparser",
+    "roundingmode",
+    "datacloud",
+    "visualeditor",
+    "installcontext",
+    "uninstallcontext",
+    "installhandler",
+    "uninstallhandler",
+    "statuscode",
+    "parentjobresult",
+    "domaincreator",
+    "domainparser",
+    "unsupportedoperationexception",
+    "noaccessexception",
+    "nodatafoundexception",
+    "securityexception",
+    "serializationexception",
+    "xmlexception",
+    "visualforceexception",
+    "asyncexception",
+    "limitexception",
+    "emailexception",
+    "requiredfeaturemissingexception",
+    "searchexception",
+    "illegalargumentexception",
+    "handledexception",
+    "externalobjectexception",
+    "flowexception",
+    "sfc",
+    "applauncher",
+    "canvas",
+    "chatteranswers",
+    "commercepayments",
+    "dataweave",
+    "functions",
+    "quiddity",
+    "richmessaging",
+    "userprovisioning",
+    "compression",
+    "slack",
     "system.schedule",
 }
 
@@ -649,6 +789,7 @@ class _Refs:
     settings: set[str] = field(default_factory=set)
     forname: set[str] = field(default_factory=set)
     dynamic: set[str] = field(default_factory=set)
+    dispatch_rows: list[dict[str, str]] = field(default_factory=list)
     annotations: list[str] = field(default_factory=list)
     collections: set[str] = field(default_factory=set)  # variables declared as List/Map/Set/array
 
@@ -874,9 +1015,17 @@ def _handle_new(toks: list[Tok], i: int, r: _Refs) -> None:
     if is_sobject_name(typ):
         r.sobjects.add(typ)
         if i + 2 < n and toks[i + 2].text == "(":
-            for fname in _named_constructor_args(toks, i + 3):
+            pairs = _named_constructor_values(toks, i + 3)
+            for fname, _ in pairs:
                 r.fields.add(f"{typ}.{fname}")
                 r.field_writes.add(f"{typ}.{fname}")
+            # A dispatch table defined in code: ``new Trigger_Handler__c(Class__c='X',
+            # Object__c='Account', Trigger_Action__c='AfterInsert')`` (TDTM, NPSP/EDA).
+            names = {f.split("__", 1)[-1] if "__" in f[:-3] else f: v for f, v in pairs}
+            if names.get("Class__c") and names.get("Object__c"):
+                r.dispatch_rows.append(
+                    {"sobject": typ, **{f: v for f, v in pairs if v is not None}}
+                )
     elif typ.lower() in _CALLOUT_TYPES:
         r.callouts.add(typ)
     elif _is_org_type(typ):
@@ -885,7 +1034,13 @@ def _handle_new(toks: list[Tok], i: int, r: _Refs) -> None:
 
 def _named_constructor_args(toks: list[Tok], j: int) -> list[str]:
     """Field names in ``new Lead(Id = x, OwnerId = y)`` starting after the '('."""
-    out: list[str] = []
+    return [name for name, _ in _named_constructor_values(toks, j)]
+
+
+def _named_constructor_values(toks: list[Tok], j: int) -> list[tuple[str, str | None]]:
+    """``(field, literal)`` pairs for named constructor args; the literal is the string
+    or number text when the value is a single literal token, else ``None``."""
+    out: list[tuple[str, str | None]] = []
     depth = 1
     n = len(toks)
     while j < n and depth > 0:
@@ -895,7 +1050,15 @@ def _named_constructor_args(toks: list[Tok], j: int) -> list[str]:
         elif text == ")":
             depth -= 1
         elif toks[j].kind is Kind.IDENT and depth == 1 and j + 1 < n and toks[j + 1].text == "=":
-            out.append(text)
+            value = toks[j + 2] if j + 2 < n else None
+            after = toks[j + 3].text if j + 3 < n else ")"
+            literal: str | None = None
+            if value is not None and after in {",", ")"}:
+                if value.kind is Kind.STRING:
+                    literal = value.text.strip("'")
+                elif value.kind is Kind.NUMBER or value.text.lower() in {"true", "false"}:
+                    literal = value.text
+            out.append((text, literal))
         j += 1
     return out
 
@@ -972,6 +1135,7 @@ def _fold(a: ApexAnalysis, r: _Refs) -> None:
     a.sobject_references = sorted(r.sobjects, key=str.lower)
     a.field_references = sorted(r.fields, key=str.lower)
     a.field_writes = sorted(r.field_writes, key=str.lower)
+    a.dispatch_rows = list(r.dispatch_rows)
     a.callouts = sorted(r.callouts, key=str.lower)
     a.named_credentials = sorted(r.named_creds)
     a.custom_labels = sorted(r.labels)

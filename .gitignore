@@ -30,6 +30,9 @@ secrets/
 .vscode/
 .DS_Store
 
+# Node tooling (install with `make apex-parser`)
+tools/apex-parser/node_modules/
+
 # Generated artifacts (per-org outputs)
 out/
 artifacts/

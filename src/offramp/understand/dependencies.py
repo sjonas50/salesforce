@@ -37,6 +37,7 @@ from offramp.core.models import (
     SchemaNodeKind,
     SchemaSnapshot,
 )
+from offramp.extract.apex.references import is_sobject_name
 from offramp.extract.dispatch.class_resolver import DispatchEdge
 from offramp.extract.dispatch.cmt_reader import CMTRecord
 
@@ -135,6 +136,7 @@ class DependencyGraph:
     api_matched: int = 0
     api_only: int = 0
     api_unmapped: int = 0
+    package_fields: int = 0  # fields resolved to installed-package nodes
     _out: dict[str, list[Dependency]] = field(default_factory=lambda: defaultdict(list), repr=False)
     _in: dict[str, list[Dependency]] = field(default_factory=lambda: defaultdict(list), repr=False)
     _edge_index: dict[tuple[str, str, str], Dependency] = field(default_factory=dict, repr=False)
@@ -338,7 +340,7 @@ def build_graph(
         b.add_cmt_records(cmt_records, components)
     for c in components:
         b.add_component_edges(c)
-    b.add_dispatch_edges(components, dispatch_edges or [])
+    b.add_dispatch_edges(components, dispatch_edges or [], cmt_records)
     b.add_cron_edges(cron_rows or [])
     if api_rows:
         _fold_api_rows(b.g, b.idx, api_rows, b.obj_node, b.external)
@@ -356,6 +358,7 @@ class _Builder:
     """Holds the graph under construction plus the name → node indexes."""
 
     def __init__(self, org_alias: str) -> None:
+        self.own_namespaces: set[str] = set()  # the project's own package namespace(s)
         self.org_alias = org_alias
         self.g = DependencyGraph(org_alias=org_alias)
         self.idx = _Index()
@@ -580,6 +583,25 @@ class _Builder:
                     notes="reads configuration",
                 )
 
+    def package_field(self, namespace: str, obj: str, fname: str) -> str:
+        """A field that belongs to an installed package: an inferred field under an
+        inferred object, plus one ``Package`` node per namespace that the org depends on."""
+        pkg = self.external("Package", namespace)
+        fid = self.inferred_field(obj, fname)
+        node = self.g.node(fid)
+        if node is not None and not node.meta.get("package"):
+            node.meta["package"] = namespace
+            self.g.add_edge(
+                fid,
+                pkg,
+                DependencyKind.REFERENCES,
+                evidence=EvidenceChannel.SCHEMA,
+                confidence=0.9,
+                notes="field of installed package",
+            )
+            self.g.package_fields += 1
+        return fid
+
     def external(self, kind: str, name: str) -> str:
         nid = _external_id(kind, name)
         self.g.add_node(
@@ -711,6 +733,11 @@ class _Builder:
                 continue
             if cls.split(".", 1)[0] in _PLATFORM_TYPES:
                 continue  # System / Schema / Database namespace types are not org code
+            if "." not in cls and is_sobject_name(cls) and cls[0].isupper():
+                # ``EntityDefinition``, ``LeadStatus``, ``ContentDistribution`` …: standard
+                # objects used as Apex types; the schema snapshot may not list them.
+                self.g.add_edge(src, self.obj_node(cls), DependencyKind.REFERENCES, evidence=ev)
+                continue
             if tid := self.idx.inner_types.get(cls.lower()):
                 # An inner class named without its outer class (``Customer`` for
                 # ``CustomerServices.Customer``): the dependency is on the declaring class.
@@ -868,14 +895,26 @@ class _Builder:
                 )
 
     def add_dispatch_edges(
-        self, components: list[Component], dispatch_edges: list[DispatchEdge]
+        self,
+        components: list[Component],
+        dispatch_edges: list[DispatchEdge],
+        cmt_records: list[CMTRecord] | None = None,
     ) -> None:
-        """CMT-driven dispatch: trigger (or dispatcher class) → handler class."""
+        """CMT-driven dispatch: trigger (or dispatcher class) → handler class.
+
+        Rows that name their object (``Object__c``, as TDTM tables do) point straight
+        at the trigger on that object; the developer-name convention is the fallback.
+        """
+        object_by_row = {
+            r.developer_name: str(r.fields.get("Object__c") or "") for r in (cmt_records or [])
+        }
         for de in dispatch_edges:
             tid = self.idx.apex.get(de.handler_class.lower())
             if tid is None:
                 continue
-            src_id = _dispatch_source(components, self.idx, de)
+            src_id = _dispatch_source(
+                components, self.idx, de, target_object=object_by_row.get(de.dispatcher_cmt, "")
+            )
             if src_id:
                 self.g.add_edge(
                     src_id,
@@ -1001,6 +1040,40 @@ def _component_active(c: Component) -> bool:
 # names the tokenizer would otherwise report as unresolved classes belong here.
 _PLATFORM_TYPES = frozenset(
     {
+        "AggregateResult",
+        "HttpCalloutMock",
+        "WebServiceMock",
+        "SaveResult",
+        "DeleteResult",
+        "UpsertResult",
+        "UndeleteResult",
+        "MergeResult",
+        "SoapType",
+        "DisplayType",
+        "IllegalArgumentException",
+        "NoAccessException",
+        "NoDataFoundException",
+        "InvalidParameterValueException",
+        "JSONException",
+        "MathException",
+        "StringException",
+        "ListException",
+        "SObjectException",
+        "SecurityException",
+        "LimitException",
+        "AccessLevel",
+        "Comparator",
+        "DataWeave",
+        "DataWeaveScriptResource",
+        "DataWeaveScriptException",
+        "Continuation",
+        "Cookie",
+        "Version",
+        "Callable",
+        "SandboxPostCopy",
+        "SandboxContext",
+        "Stack",
+        "Deque",
         "AccessType",
         "Security",
         "SObjectAccessDecision",
@@ -1094,7 +1167,6 @@ _PLATFORM_TYPES = frozenset(
         "Metadata",
         "Quiddity",
         "Request",
-        "DataWeave",
         "Invocable",
         "InvocableVariable",
         "InvocableMethod",
@@ -1113,10 +1185,22 @@ _PLATFORM_TYPES = frozenset(
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
+_NS_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)__[A-Za-z0-9_]+__(?:c|mdt|e|b|x|r)$")
+
+
+def _namespace_of(name: str) -> str | None:
+    """``npo02__Household__c`` → ``npo02``; ``Score__c`` → None."""
+    m = _NS_RE.match(name or "")
+    return m.group(1) if m else None
+
+
 def _looks_like_class(name: str) -> bool:
-    """Filter analyzer noise: single capitalized words that are common field/type names."""
+    """Filter analyzer noise: single capitalized words that are common field/type names,
+    and ALL_CAPS identifiers (constants, enum values), which are never classes."""
     if "." in name:
         return True
+    if name.isupper() or re.fullmatch(r"[A-Z0-9_]+", name):
+        return False
     return len(name) > 2 and not name.endswith(("__c", "__r", "Id"))
 
 
@@ -1142,7 +1226,12 @@ def _link_field(
         if fid is None and not last and (fid := b.field_node(f"{cur_obj}.{seg}")):
             fname = seg
         if fid is None:
-            if fname.endswith("__c") and not cur_obj.endswith(("__mdt", "__e", "__b", "__x")):
+            ns = _namespace_of(fname) or _namespace_of(cur_obj)
+            if ns and ns.lower() not in b.own_namespaces:
+                # A field of an installed package (npe01__, npo02__ …): the org has it,
+                # a source tree does not. Record the package dependency, not a gap.
+                fid = b.package_field(ns, cur_obj, fname)
+            elif fname.endswith("__c") and not cur_obj.endswith(("__mdt", "__e", "__b", "__x")):
                 b.g.unresolved.append(UnresolvedReference(src, c.name, "field", qualified, ev))
                 b.g.add_edge(
                     src,
@@ -1153,7 +1242,8 @@ def _link_field(
                     notes=f"unresolved field {qualified}",
                 )
                 return
-            fid = b.inferred_field(cur_obj, fname)
+            if fid is None:
+                fid = b.inferred_field(cur_obj, fname)
         q = f"{cur_obj}.{fname}".lower()
         note = "write" if last and q in written else "read"
         b.g.add_edge(src, fid, DependencyKind.REFERENCES, evidence=ev, confidence=conf, notes=note)
@@ -1178,8 +1268,17 @@ def _relationship_to_field(segment: str) -> str:
     return _STANDARD_RELATIONSHIPS.get(segment.lower(), segment + "Id")
 
 
-def _dispatch_source(components: list[Component], idx: _Index, de: DispatchEdge) -> str | None:
+def _dispatch_source(
+    components: list[Component], idx: _Index, de: DispatchEdge, *, target_object: str = ""
+) -> str | None:
     """Prefer the trigger on the CMT row's object; fall back to a dispatcher class."""
+    if target_object:
+        # The row says which object it serves: the trigger on that object dispatches it.
+        for c in components:
+            if c.category is CategoryName.APEX_TRIGGER:
+                raw = c.raw if isinstance(c.raw, dict) else {}
+                if str(raw.get("sobject", "")).lower() == target_object.lower():
+                    return str(c.id)
     obj = ""
     # dispatcher_cmt developer names in the fixture encode the object; real CMT rows carry Object__c.
     for c in components:

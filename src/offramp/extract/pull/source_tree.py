@@ -64,36 +64,39 @@ _KNOWN_DIRS = (
 _BUNDLE_CATEGORIES = {CategoryName.LWC_BUNDLE, CategoryName.AURA_BUNDLE}
 
 CATEGORY_GLOBS: dict[CategoryName, list[str]] = {
-    CategoryName.RECORD_TRIGGERED_FLOW: ["flows/*.flow-meta.xml"],
-    CategoryName.SCREEN_FLOW: ["flows/*.flow-meta.xml"],
-    CategoryName.SCHEDULE_TRIGGERED_FLOW: ["flows/*.flow-meta.xml"],
-    CategoryName.PLATFORM_EVENT_TRIGGERED_FLOW: ["flows/*.flow-meta.xml"],
-    CategoryName.AUTOLAUNCHED_FLOW: ["flows/*.flow-meta.xml"],
-    CategoryName.FLOW_ORCHESTRATION: ["flows/*.flow-meta.xml"],
-    CategoryName.PROCESS_BUILDER: ["flows/*.flow-meta.xml"],
-    CategoryName.APEX_TRIGGER: ["triggers/*.trigger-meta.xml", "triggers/*.trigger"],
-    CategoryName.APEX_CLASS: ["classes/*.cls-meta.xml", "classes/*.cls"],
-    CategoryName.VALIDATION_RULE: ["objects/*/validationRules/*.validationRule-meta.xml"],
-    CategoryName.FORMULA_FIELD: ["objects/*/fields/*.field-meta.xml"],
-    CategoryName.WORKFLOW_RULE: ["workflows/*.workflow-meta.xml"],
-    CategoryName.APPROVAL_PROCESS: ["approvalProcesses/*.approvalProcess-meta.xml"],
-    CategoryName.ASSIGNMENT_RULE: ["assignmentRules/*.assignmentRules-meta.xml"],
-    CategoryName.AUTO_RESPONSE_RULE: ["autoResponseRules/*.autoResponseRules-meta.xml"],
-    CategoryName.ESCALATION_RULE: ["escalationRules/*.escalationRules-meta.xml"],
-    CategoryName.SHARING_RULE: ["sharingRules/*.sharingRules-meta.xml"],
-    CategoryName.ROLLUP_SUMMARY: ["objects/*/fields/*.field-meta.xml"],
-    CategoryName.PLATFORM_EVENT: ["objects/*__e/*.object-meta.xml"],
-    CategoryName.CHANGE_DATA_CAPTURE: ["_tooling/cdc_subscriptions.json"],
-    CategoryName.LWC_BUNDLE: ["lwc/*/"],
-    CategoryName.AURA_BUNDLE: ["aura/*/"],
-    CategoryName.PAGE_LAYOUT: ["layouts/*.layout-meta.xml"],
-    CategoryName.FLEXIPAGE: ["flexipages/*.flexipage-meta.xml"],
-    CategoryName.PERMISSION_SET: ["permissionsets/*.permissionset-meta.xml"],
-    CategoryName.PROFILE: ["profiles/*.profile-meta.xml"],
-    CategoryName.REPORT: ["reports/**/*.report-meta.xml"],
-    CategoryName.CUSTOM_TAB: ["tabs/*.tab-meta.xml"],
-    CategoryName.CUSTOM_APPLICATION: ["applications/*.app-meta.xml"],
-    CategoryName.PATH_ASSISTANT: ["pathAssistants/*.pathAssistant-meta.xml"],
+    # Recursive and suffix-based: an SFDX package directory may hold metadata in any
+    # subfolder (NPSP keeps its trigger framework in ``force-app/tdtm/``, apex-recipes
+    # its tests in ``force-app/tests/<Group>/``); the type comes from the suffix.
+    CategoryName.RECORD_TRIGGERED_FLOW: ["**/*.flow-meta.xml"],
+    CategoryName.SCREEN_FLOW: ["**/*.flow-meta.xml"],
+    CategoryName.SCHEDULE_TRIGGERED_FLOW: ["**/*.flow-meta.xml"],
+    CategoryName.PLATFORM_EVENT_TRIGGERED_FLOW: ["**/*.flow-meta.xml"],
+    CategoryName.AUTOLAUNCHED_FLOW: ["**/*.flow-meta.xml"],
+    CategoryName.FLOW_ORCHESTRATION: ["**/*.flow-meta.xml"],
+    CategoryName.PROCESS_BUILDER: ["**/*.flow-meta.xml"],
+    CategoryName.APEX_TRIGGER: ["**/*.trigger-meta.xml", "**/*.trigger"],
+    CategoryName.APEX_CLASS: ["**/*.cls-meta.xml", "**/*.cls"],
+    CategoryName.VALIDATION_RULE: ["**/objects/*/validationRules/*.validationRule-meta.xml"],
+    CategoryName.FORMULA_FIELD: ["**/objects/*/fields/*.field-meta.xml"],
+    CategoryName.WORKFLOW_RULE: ["**/*.workflow-meta.xml"],
+    CategoryName.APPROVAL_PROCESS: ["**/*.approvalProcess-meta.xml"],
+    CategoryName.ASSIGNMENT_RULE: ["**/*.assignmentRules-meta.xml"],
+    CategoryName.AUTO_RESPONSE_RULE: ["**/*.autoResponseRules-meta.xml"],
+    CategoryName.ESCALATION_RULE: ["**/*.escalationRules-meta.xml"],
+    CategoryName.SHARING_RULE: ["**/*.sharingRules-meta.xml"],
+    CategoryName.ROLLUP_SUMMARY: ["**/objects/*/fields/*.field-meta.xml"],
+    CategoryName.PLATFORM_EVENT: ["**/objects/*__e/*.object-meta.xml"],
+    CategoryName.CHANGE_DATA_CAPTURE: ["**/_tooling/cdc_subscriptions.json"],
+    CategoryName.LWC_BUNDLE: ["**/lwc/*/"],
+    CategoryName.AURA_BUNDLE: ["**/aura/*/"],
+    CategoryName.PAGE_LAYOUT: ["**/*.layout-meta.xml"],
+    CategoryName.FLEXIPAGE: ["**/*.flexipage-meta.xml"],
+    CategoryName.PERMISSION_SET: ["**/*.permissionset-meta.xml"],
+    CategoryName.PROFILE: ["**/*.profile-meta.xml"],
+    CategoryName.REPORT: ["**/*.report-meta.xml"],
+    CategoryName.CUSTOM_TAB: ["**/*.tab-meta.xml"],
+    CategoryName.CUSTOM_APPLICATION: ["**/*.app-meta.xml"],
+    CategoryName.PATH_ASSISTANT: ["**/*.pathAssistant-meta.xml"],
 }
 
 # Flow variants and field kinds share globs; try the most specific first.
@@ -134,22 +137,22 @@ def locate_source_roots(root: Path) -> list[Path]:
     package so nothing is silently dropped. VCS and tooling directories are
     skipped: ``.git/objects`` is not a metadata folder.
     """
-    if any((root / d).is_dir() for d in _KNOWN_DIRS):
-        return [root]
     roots: list[Path] = []
     project = root / "sfdx-project.json"
     if project.is_file():
         try:
             for pd in json.loads(project.read_text(encoding="utf-8")).get("packageDirectories", []):
                 base = root / str(pd.get("path", "")).lstrip("./")
-                for cand in (base / "main" / "default", base):
-                    if cand.is_dir() and any((cand / d).is_dir() for d in _KNOWN_DIRS):
-                        roots.append(cand)
-                        break
+                # The package directory is the root: SFDX allows metadata anywhere below
+                # it, not only under main/default.
+                if base.is_dir():
+                    roots.append(base)
         except (OSError, ValueError):
             roots = []
     if roots:
         return roots
+    if any((root / d).is_dir() for d in _KNOWN_DIRS):
+        return [root]
     candidates = sorted(
         {p.parent for d in _KNOWN_DIRS for p in root.glob(f"**/{d}") if p.is_dir()},
         key=lambda p: (len(p.parts), str(p)),
@@ -166,6 +169,26 @@ def locate_source_roots(root: Path) -> list[Path]:
 def locate_source_root(root: Path) -> Path:
     """First source root; see :func:`locate_source_roots`."""
     return locate_source_roots(root)[0]
+
+
+# CumulusCI writes namespace placeholders into source that is deployed unmanaged
+# (``%%%NAMESPACE%%%ServiceSchedule__c``); resolve them the way ``cci`` does for an
+# org without a namespace.
+_NAMESPACE_TOKENS = (
+    ("%%%NAMESPACE_OR_C%%%", "c"),
+    ("%%%NAMESPACE_DOT%%%", ""),
+    ("%%%NAMESPACED_ORG%%%", ""),
+    ("%%%NAMESPACED_RT%%%", ""),
+    ("%%%NAMESPACE%%%", ""),
+)
+
+
+def _strip_namespace_tokens(text: str) -> str:
+    if "%%%" not in text:
+        return text
+    for token, repl in _NAMESPACE_TOKENS:
+        text = text.replace(token, repl)
+    return text
 
 
 class SourceTree:
@@ -216,8 +239,12 @@ class SourceTree:
         return out
 
     def _iter_category_paths(self, cat: CategoryName) -> Iterator[Path]:
+        seen: set[Path] = set()
         for glob in CATEGORY_GLOBS.get(cat, []):
             for path in sorted(p for r in self.roots for p in r.glob(glob)):
+                if _SKIP_PARTS & set(path.parts) or path in seen:
+                    continue
+                seen.add(path)
                 if cat in _BUNDLE_CATEGORIES:
                     if path.is_dir():
                         yield path
@@ -239,9 +266,11 @@ class SourceTree:
                 payload = self._file_payload(path)
                 api_name = derive_api_name(path)
                 if cat is CategoryName.REPORT:
-                    # Reports are addressed as Folder/Name.
-                    rel = Path(self._rel(path))
-                    api_name = str(rel.relative_to("reports").with_name(api_name))
+                    # Reports are addressed as Folder/Name (below the reports/ segment).
+                    parts = Path(self._rel(path)).parts
+                    if "reports" in parts:
+                        below = parts[parts.index("reports") + 1 : -1]
+                        api_name = "/".join([*below, api_name])
             if not _matches_category(cat, payload):
                 continue
             seen_names.add(api_name)
@@ -251,7 +280,7 @@ class SourceTree:
         """File text, cached: Flow files are matched by seven category globs."""
         key = str(path)
         if key not in self._text_cache:
-            self._text_cache[key] = path.read_text(encoding="utf-8")
+            self._text_cache[key] = _strip_namespace_tokens(path.read_text(encoding="utf-8"))
         return self._text_cache[key]
 
     def _file_payload(self, path: Path) -> dict[str, Any]:
@@ -313,11 +342,12 @@ class SourceTree:
         # Reservation__c, es-base-code adds fields to it): merge by name.
         by_name: dict[str, ObjectFiles] = {}
         obj_dirs = sorted(
-            p
-            for r in self.roots
-            if (r / "objects").is_dir()
-            for p in (r / "objects").iterdir()
-            if p.is_dir()
+            {
+                p
+                for r in self.roots
+                for p in r.glob("**/objects/*")
+                if p.is_dir() and not (_SKIP_PARTS & set(p.parts))
+            }
         )
         for obj_dir in obj_dirs:
             of = by_name.setdefault(obj_dir.name, ObjectFiles(name=obj_dir.name))
@@ -337,9 +367,9 @@ class SourceTree:
     def tooling_json(self, name: str) -> Any:
         """Load ``_tooling/<name>.json`` if present, else ``None``."""
         for r in self.roots:
-            p = r / "_tooling" / f"{name}.json"
-            if p.is_file():
-                return json.loads(p.read_text(encoding="utf-8"))
+            for p in sorted(r.glob(f"**/_tooling/{name}.json")):
+                if not (_SKIP_PARTS & set(p.parts)):
+                    return json.loads(p.read_text(encoding="utf-8"))
         return None
 
 

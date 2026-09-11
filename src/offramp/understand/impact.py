@@ -477,6 +477,12 @@ def summarize(
         "api_rows_seen": graph.api_rows_seen,
         "api_matched": graph.api_matched,
         "api_only": graph.api_only,
+        "package_fields": graph.package_fields,
+        "package_dependencies": sorted(
+            n.api_name
+            for n in graph.nodes.values()
+            if n.kind == "external" and n.category == "Package"
+        ),
         "custom_fields": sum(1 for n in fields if n.meta.get("custom")),
         "unused_custom_fields": sum(1 for u in unused if u.reason == "no_references"),
         "test_only_custom_fields": sum(1 for u in unused if u.reason == "test_only"),

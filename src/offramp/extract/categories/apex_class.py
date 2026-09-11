@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from offramp.core.models import CategoryName
-from offramp.extract.apex.references import analyze
+from offramp.extract.apex import analyze
 from offramp.extract.categories.base import CategoryExtractor, register
 from offramp.extract.categories.xml_utils import as_str, get_body
 from offramp.extract.pull.reconciler import ReconciledRecord
@@ -42,12 +42,16 @@ def analysis_payload(record: ReconciledRecord, body_key: str) -> dict[str, Any]:
     }
     return {
         "has_body": bool(body),
+        "managed_hidden": bool(record.payload.get("managed_hidden")),
+        "length_without_comments": record.payload.get("length_without_comments"),
+        "is_valid": record.payload.get("is_valid"),
         "body": body,
         "body_lines": body.count("\n") + 1 if body else 0,
         "analysis": a,
         "entry_points": a.get("entry_points", []),
         "is_test": bool(a.get("is_test")),
         "inner_types": a.get("inner_types", []),
+        "dispatch_rows": a.get("dispatch_rows", []),
         "dynamic_access": a.get("dynamic_access", []),
         "references": refs,
     }

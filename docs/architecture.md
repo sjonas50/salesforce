@@ -84,7 +84,7 @@
 | C17 | `src/engram` | Provenance client (every read/write/decision anchored) | Python wrapping Rust core | Decision payloads | Engram record IDs |
 | C18 | `src/event_bus` | Pluggable abstraction (Redis Streams dev, Azure Event Hubs prod, NATS on-prem) | Python | Cross-component messages | Delivered events |
 | C19 | `src/extract/pull/source_tree` | One reader for sf-retrieve-shaped directories (fixtures, sf CLI output, SFDX projects); captures Apex bodies, all fields, objects, record types | Python | Directory | RawMetadataRecord + ObjectFiles |
-| C20 | `src/extract/apex` | Tokenizer-based Apex static analysis: class graph, SOQL/DML targets, field writes, callouts, entry points (AD-31) | Python | `.cls` / `.trigger` source | `ApexAnalysis` |
+| C20 | `src/extract/apex` | Apex static analysis: class graph, SOQL/DML targets, field writes, callouts, entry points (AD-31) — grammar-backed engine (ANTLR via Node, `tools/apex-parser`) with the tokenizer as fallback | Python + Node | `.cls` / `.trigger` source | `ApexAnalysis` |
 | C21 | `src/extract/schema` | Data model from source tree and/or REST describe | Python | objects/, describeGlobal + describe | `SchemaSnapshot` |
 | C22 | `src/understand/dependencies` | Typed dependency graph with evidence + confidence per edge; Dependency-API rows folded in as cross-check (AD-28, AD-30) | Python | Components + schema + CMT + API rows | `DependencyGraph` |
 | C24 | `src/knowledge` + `src/core/process.py` | Platform-neutral `ProcessDefinition` (trigger, conditions, steps, effects) for every automation; content-addressed process library with scan history, families, search, Markdown/Mermaid rendering; persistent FalkorDB mirror (AD-32) | Python, FalkorDB (optional) | Components | Reusable process library |
@@ -207,7 +207,7 @@ These supplements address the [research.md Appendix A](research.md#appendix-a-re
 | AD-29 | Two extraction paths, REST/Tooling first (`extract/pull/tooling_api`), sf CLI second (`extract/pull/sf_cli`); both feed C19. | C1 |
 | AD-30 | Every edge carries `evidence` + `confidence`, surfaced in the X-Ray report. | C22, C23 |
 | AD-32 | **The knowledge graph is the product asset, not the report.** Every automation is normalized to a `ProcessDefinition` (AD-31 analyzer output feeds it at `references_only` fidelity) and stored content-addressed in the library; the same logic in two orgs or two scans is one entry with many sources. Reports are views over the library. Year-two generators consume `ProcessDefinition`, not Salesforce metadata. | C24 |
-| AD-31 | No summit-ast; tokenizer analyzer behind the `ApexAnalysis` contract, grammar parser is a year-two swap. | C20 |
+| AD-31 | No summit-ast; two engines behind the `ApexAnalysis` contract — Salesforce's ANTLR grammar (Node package, default) and the own tokenizer (fallback). | C20 |
 
 ## 8. File Structure (target)
 

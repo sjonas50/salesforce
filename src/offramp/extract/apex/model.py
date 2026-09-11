@@ -56,6 +56,7 @@ class ApexAnalysis:
     sobject_references: list[str] = field(default_factory=list)
     field_references: list[str] = field(default_factory=list)  # 'Object.Field'
     field_writes: list[str] = field(default_factory=list)  # assigned fields ('Lead.OwnerId')
+    dispatch_rows: list[dict[str, str]] = field(default_factory=list)  # code-defined handler tables
     soql: list[SoqlRef] = field(default_factory=list)
     dml: list[DmlRef] = field(default_factory=list)
     callouts: list[str] = field(default_factory=list)  # 'Http', 'WebServiceCallout', 'Continuation'
@@ -71,6 +72,8 @@ class ApexAnalysis:
     tokens: int = 0
     branches: int = 0  # if / else if / for / while / do / switch / ternary
     methods: int = 0
+    engine: str = "tokenizer"  # tokenizer | ast (grammar-backed parser)
+    parse_errors: int = 0  # syntax errors reported by the grammar (0 for the tokenizer)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
