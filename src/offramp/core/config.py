@@ -57,7 +57,7 @@ class LLMSettings(BaseSettings):
 
     base_url: str = "https://api.anthropic.com"
     api_key: SecretStr = SecretStr("")
-    model: str = "claude-sonnet-4-6"
+    model: str = "claude-sonnet-5"
     max_tokens: int = 1024
     requests_per_minute: int = 50
 

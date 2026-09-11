@@ -173,6 +173,21 @@ def _render_step(s: Step, y: int) -> str:
                         indent=i,
                     )
                 )
+        if k is StepKind.CREATE and s.extras.get("record_id_to"):
+            parts.insert(
+                len(head), _el("assignRecordIdToReference", s.extras["record_id_to"], indent=i)
+            )
+        # A record-variable form (inputReference) excludes the object/filters/assignments
+        # form; Salesforce rejects both together. Use the reference only when nothing
+        # else describes the record.
+        by_reference = (
+            k in {StepKind.CREATE, StepKind.UPDATE, StepKind.DELETE}
+            and bool(s.extras.get("input"))
+            and not s.inputs
+            and not s.when
+        )
+        if by_reference:
+            parts.append(_el("inputReference", s.extras["input"], indent=i))
         if k is StepKind.LOOKUP:  # schema order: getFirstRecordOnly < object < queriedFields
             parts.append(
                 _el(
@@ -181,13 +196,18 @@ def _render_step(s: Step, y: int) -> str:
                     indent=i,
                 )
             )
-        parts.append(_el("object", s.object or "", indent=i))
+        if not by_reference:
+            parts.append(_el("object", s.object or "", indent=i))
         if k is StepKind.LOOKUP:
+            output = s.extras.get("output")
+            if output:  # schema order: object < outputReference < queriedFields
+                parts.append(_el("outputReference", output, indent=i))
             filter_fields = {c.left for c in (s.when.conditions if s.when else [])}
             for f in s.fields:
                 if f not in filter_fields:
                     parts.append(_el("queriedFields", _field_of(f), indent=i))
-            parts.append(_el("storeOutputAutomatically", "true", indent=i))
+            if not output:
+                parts.append(_el("storeOutputAutomatically", "true", indent=i))
         return _el(tag, None, *parts, indent=1)
     if k in {StepKind.CALL_CODE, StepKind.CALL_ACTION, StepKind.NOTIFY}:
         action_type = {

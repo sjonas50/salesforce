@@ -69,6 +69,10 @@ def _salesforce_message(exc: BaseException) -> str:
     content = getattr(exc, "content", None)
     if isinstance(content, list) and content and isinstance(content[0], dict):
         first = content[0]
+        # Flow actions nest their errors: [{"actionName", "errors": [{"message", "statusCode"}], ...}]
+        nested = first.get("errors")
+        if isinstance(nested, list) and nested and isinstance(nested[0], dict):
+            return f"{nested[0].get('statusCode', '')}: {str(nested[0].get('message', ''))[:400]}"
         return f"{first.get('errorCode', '')}: {str(first.get('message', ''))[:400]}"
     return str(exc)[:400]
 

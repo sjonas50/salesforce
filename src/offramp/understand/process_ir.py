@@ -364,15 +364,31 @@ def _flow_step(
             reads.add(q)
         if sk is StepKind.LOOKUP:
             reads.update(f for f in fields if f)
+        extras: dict[str, Any] = {}
+        if sk is StepKind.LOOKUP:
+            extras["first_only"] = bool(el.get("get_first_record_only"))
+        # The variable a lookup / create writes into decides what later steps can read;
+        # dropping it made a rendered copy pass a null record id to an email alert.
+        if el.get("output_reference"):
+            extras["output"] = el["output_reference"]
+        if el.get("assign_record_id_to"):
+            extras["record_id_to"] = el["assign_record_id_to"]
+        # The record-variable form ("update $Record") only when nothing else describes
+        # the record; Salesforce allows one form or the other, and the renderer follows.
+        if (
+            el.get("input_reference")
+            and sk is not StepKind.LOOKUP
+            and not inputs
+            and not el.get("filters")
+        ):
+            extras["input"] = el["input_reference"]
         return Step(
             kind=sk,
             object=target_obj,
             fields=sorted(set(fields)),
             inputs=inputs,
             when=when,
-            extras={"first_only": bool(el.get("get_first_record_only"))}
-            if sk is StepKind.LOOKUP
-            else {},
+            extras=extras,
             **base,
         )
     if kind == "actionCalls":

@@ -102,3 +102,18 @@ def test_flow_deploy_zip_holds_package_and_flow() -> None:
     z = zipfile.ZipFile(io.BytesIO(flow_deploy_zip("LeadRouting_rt", "<Flow/>")))
     assert set(z.namelist()) == {"package.xml", "flows/LeadRouting_rt.flow"}
     assert "<members>LeadRouting_rt</members>" in z.read("package.xml").decode()
+
+
+def test_lookup_output_reference_survives_the_round_trip(tmp_path: Path) -> None:
+    """A lookup that writes into a variable must render outputReference, or a copy's
+    later steps read null (the live round-trip caught exactly this)."""
+    originals = _definitions(FIX, tmp_path / "a")
+    p = originals["SendWelcomeEmail"]
+    lookup = next(s for s in p.steps if s.kind.value == "lookup")
+    assert lookup.extras.get("output") == "lead"
+    xml = to_flow_xml(p)
+    assert "<outputReference>lead</outputReference>" in xml
+    assert (
+        "<storeOutputAutomatically>true</storeOutputAutomatically>"
+        not in xml.split("</recordLookups>")[0]
+    )

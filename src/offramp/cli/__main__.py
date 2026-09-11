@@ -10,6 +10,7 @@ import argparse
 import sys
 
 from offramp import __version__
+from offramp.cli.changes import add_changes_subparser
 from offramp.cli.compare import add_compare_subparser
 from offramp.cli.cutover import add_cutover_subparser
 from offramp.cli.extract import add_extract_subparser
@@ -35,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_impact_subparser(sub)
     add_kg_subparser(sub)
     add_compare_subparser(sub)
+    add_changes_subparser(sub)
     add_verify_subparser(sub)
     add_generate_subparser(sub)
     add_shadow_subparser(sub)

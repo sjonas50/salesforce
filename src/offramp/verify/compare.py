@@ -199,6 +199,9 @@ def compare_roundtrip(original: ExecutionTrace, copy: ExecutionTrace | None) -> 
     """The rendered copy must take the same path and perform the same DML as the original."""
     if copy is None:
         return Check("roundtrip_copy_ran", False, "no interview for the rendered copy")
+    if copy.errors and not original.errors:
+        # The copy failed where the original did not: the rendering lost something.
+        return Check("roundtrip_copy_errored", False, "; ".join(copy.errors)[:300])
     if original.path != copy.path:
         return Check(
             "roundtrip_path_matches", False, f"original {original.path} vs copy {copy.path}"

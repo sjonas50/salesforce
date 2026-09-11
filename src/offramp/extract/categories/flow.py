@@ -186,6 +186,9 @@ def _element(kind: str, el: dict[str, Any]) -> dict[str, Any]:
         out["output_assignments"] = _assignments(el.get("outputAssignments"))
         out["get_first_record_only"] = as_bool(el.get("getFirstRecordOnly"))
         out["store_output_automatically"] = as_bool(el.get("storeOutputAutomatically"))
+        # Where the result goes: a named variable, or the element itself ("auto").
+        out["output_reference"] = as_str(el.get("outputReference"))
+        out["assign_record_id_to"] = as_str(el.get("assignRecordIdToReference"))
     elif kind == "actionCalls":
         out["action_name"] = as_str(el.get("actionName"))
         out["action_type"] = as_str(el.get("actionType"))

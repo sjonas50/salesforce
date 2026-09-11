@@ -23,7 +23,8 @@ deploy() {
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["records"][0]["Email"])')}"
   local src; src="$(mktemp -d)/sample_org"
   cp -R tests/integration/fixtures/sample_org "$src"
-  sed -i '' "s|sales@example.com|$sender|g" "$src"/autoResponseRules/*.xml
+  # Queue email too: an alert addressed to a queue-owned record's "owner" needs it.
+  sed -i '' "s|sales@example.com|$sender|g" "$src"/autoResponseRules/*.xml "$src"/queues/*.xml
   # Salesforce no longer lets new orgs create Process Builder processes (processType
   # Workflow); the fixture keeps one for the parser path, but it cannot be deployed.
   grep -l "<processType>Workflow</processType>" "$src"/flows/*.xml | xargs rm -f

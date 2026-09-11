@@ -225,3 +225,8 @@ def write_result(result: ExtractRunResult, out: Path, *, library: Path | None = 
             scan=rec.scan_id,
             new=len(rec.new_process_ids),
         )
+        # D.6: what moved since the org's last scan into this library.
+        from offramp.understand.changes import ChangeLog
+
+        cs = ChangeLog(library).record(result.org_alias, result.components, scan_id=rec.scan_id)
+        print(cs.to_text())
