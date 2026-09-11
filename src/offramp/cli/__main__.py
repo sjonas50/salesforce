@@ -22,6 +22,7 @@ from offramp.cli.health import add_health_subparser
 from offramp.cli.impact import add_impact_subparser
 from offramp.cli.kg import add_kg_subparser
 from offramp.cli.recipes import add_recipes_subparser
+from offramp.cli.review import add_review_subparser
 from offramp.cli.shadow import add_shadow_subparser
 from offramp.cli.verify import add_verify_subparser
 from offramp.cli.xray import add_xray_subparser
@@ -44,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_compare_subparser(sub)
     add_health_subparser(sub)
     add_recipes_subparser(sub)
+    add_review_subparser(sub)
     add_changes_subparser(sub)
     add_verify_subparser(sub)
     add_generate_subparser(sub)

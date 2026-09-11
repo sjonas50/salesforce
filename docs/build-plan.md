@@ -179,7 +179,9 @@ The LLM pass runs on every X-Ray scan (`LLM_API_KEY`; workspace-scoped key or `L
 | v1 | 4,000-char slice of raw metadata | 0.75 | 43 at ≤ 0.6 | low scores = sharing-rule config dumps, bundles without source, managed code, truncated prompts |
 | v2 | dossier: facts + process model + neighbourhood + source; evidence + unknowns required; deterministic tier hint; earned confidence | 0.92 (model-annotated rows 0.74 under the caps) | 11 | 216 empty sharing rules answered by rule at 1.0; managed code/bundles described from outside and capped at 0.5; 7 business-process narratives with risks |
 
-The remaining low scores are honest: hidden managed-package code and bundles (unknowns listed), and components whose only visible caller is a page. Next for confidence: a review sample (accept/reject per annotation) to calibrate the caps against people, and verify results cited as facts on every flow (`offramp annotate --verify-results`).
+The remaining low scores are honest: hidden managed-package code and bundles (unknowns listed), and components whose only visible caller is a page.
+
+**Calibration round 1 (2026-09-11).** `offramp review sample` drew 20 annotations across every confidence band; the user accepted all 20 summaries and tiers (Brier 0.169). The rule-based confidence was too harsh at the low end (the 0.0–0.5 band measured 1.00 accuracy), so `calibrated_confidence` now lifts those bands — except hidden-source rows, which keep the 0.5 ceiling because an accepted "cannot be inspected" sentence is accurate, not knowledge. A round with zero rejections cannot bound the error rate at the top; round 2 should review narratives step by step on the largest, tier-2 and most-connected components.
 
 ## Known limitations (tracked, not yet scheduled)
 

@@ -137,6 +137,7 @@ def _component_rows(inputs: XRayInputs) -> list[dict[str, Any]]:
                 "domain": a.domain if a else "",
                 "tier": a.recommended_tier if a else "",
                 "annotation_confidence": a.confidence if a else None,
+                "calibrated_confidence": a.calibrated_confidence if a else None,
                 "needs_review": bool(a.needs_review) if a else False,
                 "narrative": a.narrative if a else "",
                 "evidence": list(a.evidence) if a else [],
@@ -229,9 +230,12 @@ def _annotation_stats(annotations: list[Annotation]) -> dict[str, Any]:
     if not annotations:
         return {"count": 0}
     confs = [a.confidence for a in annotations]
+    cal = [a.calibrated_confidence for a in annotations if a.calibrated_confidence is not None]
     return {
         "count": len(annotations),
         "mean_confidence": round(sum(confs) / len(confs), 2),
+        "calibrated": len(cal),
+        "mean_calibrated_confidence": round(sum(cal) / len(cal), 2) if cal else None,
         "below_0_6": sum(1 for c in confs if c < 0.6),
         "needs_review": sum(1 for a in annotations if a.needs_review),
         "deterministic": sum(1 for a in annotations if a.deterministic),

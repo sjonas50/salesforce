@@ -80,6 +80,7 @@ class Annotation(BaseModel):
     deterministic: bool = False
     context_chars: int = 0
     confidence_notes: list[str] = Field(default_factory=list)
+    calibrated_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class ProcessAnnotation(BaseModel):
