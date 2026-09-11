@@ -9,14 +9,19 @@ from __future__ import annotations
 import argparse
 import sys
 
+from dotenv import load_dotenv
+
 from offramp import __version__
+from offramp.cli.annotate import add_annotate_subparser
 from offramp.cli.changes import add_changes_subparser
 from offramp.cli.compare import add_compare_subparser
 from offramp.cli.cutover import add_cutover_subparser
 from offramp.cli.extract import add_extract_subparser
 from offramp.cli.generate import add_generate_subparser
+from offramp.cli.health import add_health_subparser
 from offramp.cli.impact import add_impact_subparser
 from offramp.cli.kg import add_kg_subparser
+from offramp.cli.recipes import add_recipes_subparser
 from offramp.cli.shadow import add_shadow_subparser
 from offramp.cli.verify import add_verify_subparser
 from offramp.cli.xray import add_xray_subparser
@@ -35,7 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_xray_subparser(sub)
     add_impact_subparser(sub)
     add_kg_subparser(sub)
+    add_annotate_subparser(sub)
     add_compare_subparser(sub)
+    add_health_subparser(sub)
+    add_recipes_subparser(sub)
     add_changes_subparser(sub)
     add_verify_subparser(sub)
     add_generate_subparser(sub)
@@ -46,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # OFFRAMP_* knobs (library dir, Apex engine) are read from os.environ, not pydantic.
+    load_dotenv(override=False)
     args = build_parser().parse_args(argv)
     if args.command == "info":
         log.info("offramp.info", version=__version__, status="xray-v0.2")

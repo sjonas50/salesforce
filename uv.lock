@@ -585,6 +585,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "python-dotenv" },
     { name = "structlog" },
 ]
 
@@ -648,6 +649,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pydantic-settings", specifier = ">=2.3,<3" },
     { name = "pyjwt", marker = "extra == 'salesforce'", specifier = ">=2.10" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "simple-salesforce", marker = "extra == 'salesforce'", specifier = ">=1.12.9" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'shadow'", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.1" },

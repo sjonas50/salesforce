@@ -197,6 +197,42 @@ async def test_profile_from_gateway_uses_aggregates_and_record_counts() -> None:
     assert lead.last_modified is not None
 
 
+@pytest.mark.asyncio
+async def test_profile_drops_fields_soql_calls_invalid_and_retries() -> None:
+    """A field describe hid (no FLS, pitfall 22) is 'Invalid field' to SOQL: drop it, keep the rest."""
+    backend = InMemorySalesforceBackend()
+    backend.records = {"Lead": {"L1": {"Id": "L1"}}}
+    backend.rest["query"] = None
+    seen: list[str] = []
+
+    class _Gateway(MCPGateway):
+        async def sf_query(self, soql: str) -> dict[str, Any]:
+            seen.append(soql)
+            if "Score__c" in soql:
+                raise RuntimeError(
+                    "Malformed request ... Response content: [{'message': \"COUNT(Score__c) c1\\n"
+                    "ERROR at Row:1:Column:60\\nInvalid field: 'Score__c'\", 'errorCode': 'INVALID_FIELD'}]"
+                )
+            return {"records": [{"total": 1, "lm": None, "c0": 1}]}
+
+    gw = _Gateway(backend=backend, engram=InMemoryEngramClient())
+    schema = from_source_tree(SourceTree(FIX), org_alias="t")
+    two = schema.model_copy(
+        update={
+            "nodes": [
+                n
+                for n in schema.nodes
+                if n.api_name in {"Lead", "Lead.Country__c", "Lead.Score__c"}
+            ]
+        }
+    )
+    prof = await profile_from_gateway(gw, two, org_alias="t")
+    lead = prof.objects["Lead"]
+    assert len(seen) == 2 and "Score__c" not in seen[1]
+    assert lead.error is None
+    assert "Lead.Country__c" in lead.fields and "Lead.Score__c" not in lead.fields
+
+
 # ---- Metadata API path ----------------------------------------------------------
 
 
@@ -450,9 +486,26 @@ def test_source_tree_handles_multi_package_projects_and_skips_git(tmp_path: Path
     )
     tree = SourceTree(tmp_path)
     assert [r.relative_to(tmp_path).as_posix() for r in tree.roots] == [
-        "es-base-objects/main/default",
-        "es-base-code/main/default",
+        "es-base-objects",
+        "es-base-code",
     ]
+    # SFDX allows metadata in any subfolder of a package directory, typed by suffix:
+    # NPSP keeps its trigger framework in force-app/tdtm/, apex-recipes tests in
+    # force-app/tests/<Group>/ with no classes/ folder at all.
+    (tmp_path / "es-base-code" / "tdtm" / "classes").mkdir(parents=True)
+    (tmp_path / "es-base-code" / "tdtm" / "classes" / "TDTM_Runnable.cls").write_text(
+        "public virtual class TDTM_Runnable { public class DmlWrapper {} }"
+    )
+    (tmp_path / "es-base-code" / "tests" / "Async Recipes").mkdir(parents=True)
+    (tmp_path / "es-base-code" / "tests" / "Async Recipes" / "Queue_Tests.cls").write_text(
+        "@isTest private class Queue_Tests {}"
+    )
+    (tmp_path / "es-base-code" / "node_modules" / "x" / "classes").mkdir(parents=True)
+    (tmp_path / "es-base-code" / "node_modules" / "x" / "classes" / "Noise.cls").write_text(
+        "public class Noise {}"
+    )
+    names = {n for _, _, n in SourceTree(tmp_path)._iter_category(CategoryName.APEX_CLASS)}
+    assert {"MarketServices", "TDTM_Runnable", "Queue_Tests"} <= names and "Noise" not in names
     objs = {o.name: o for o in tree.object_files()}
     assert set(objs["Reservation__c"].fields) == {"Status__c", "Notes__c"}  # merged across packages
     assert CategoryName.APEX_CLASS in tree.present_categories()

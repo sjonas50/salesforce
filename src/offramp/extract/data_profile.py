@@ -45,6 +45,8 @@ _UNAGGREGATABLE_TYPES = {
     )
 }
 _UNSUPPORTED_RE = re.compile(r"field (\w+) does not support aggregate operator")
+# A field describe hid (no FLS for the running user, pitfall 22) is still "Invalid field" to SOQL.
+_INVALID_FIELD_RE = re.compile(r"Invalid field: '(\w+)'")
 _SKIP_OBJECT_SUFFIXES = ("__mdt", "__e", "__b", "__x", "Share", "History", "Feed", "ChangeEvent")
 
 
@@ -110,7 +112,7 @@ async def profile_from_gateway(
                 except Exception as exc:  # one failing object must not sink the profile
                     # Salesforce names the field it refuses to COUNT; drop it and retry so
                     # a type this list does not know about costs one field, not the object.
-                    m = _UNSUPPORTED_RE.search(str(exc))
+                    m = _UNSUPPORTED_RE.search(str(exc)) or _INVALID_FIELD_RE.search(str(exc))
                     bad = m.group(1) if m else None
                     if bad and any(f.api_name.split(".", 1)[1] == bad for f in chunk):
                         log.info(

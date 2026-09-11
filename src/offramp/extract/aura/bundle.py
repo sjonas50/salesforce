@@ -20,6 +20,7 @@ from typing import Any, ClassVar
 
 from offramp.core.models import CategoryName
 from offramp.extract.categories.base import CategoryExtractor
+from offramp.extract.categories.xml_utils import keep_sources
 from offramp.extract.pull.reconciler import ReconciledRecord
 
 _CONTROLLER_RE = re.compile(
@@ -86,6 +87,7 @@ class AuraBundleExtractor(CategoryExtractor):
         return {
             "kind": _kind(files),
             "files": sorted(files),
+            "sources": keep_sources(files),
             "classification": classification,
             "lines": lines,
             "references": {

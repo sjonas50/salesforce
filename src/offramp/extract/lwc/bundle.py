@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 
 from offramp.core.models import CategoryName
 from offramp.extract.categories.base import CategoryExtractor
+from offramp.extract.categories.xml_utils import keep_sources
 from offramp.extract.pull.reconciler import ReconciledRecord
 
 
@@ -119,6 +120,7 @@ class LWCBundleExtractor(CategoryExtractor):
                     "custom_labels": [],
                 },
                 "files": list(files.keys()),
+                "sources": keep_sources(files),
                 "classification": LWCClassification.UI_ONLY.value,
                 "apex_imports": [],
                 "js_analyses": [],
@@ -160,6 +162,7 @@ class LWCBundleExtractor(CategoryExtractor):
                 "message_channels": sorted(set(_MESSAGE_CHANNEL_RE.findall(js_sources))),
             },
             "files": sorted(files.keys()),
+            "sources": keep_sources(files),
             "classification": worst.value,
             "apex_imports": all_imports,
             "js_analyses": [

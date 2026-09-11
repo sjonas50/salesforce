@@ -60,6 +60,7 @@ class ToolingSupplement:
     cmt_records: list[CMTRecord] = field(default_factory=list)
     dependency_rows: list[dict[str, Any]] = field(default_factory=list)
     cron_rows: list[dict[str, Any]] = field(default_factory=list)
+    packages: list[dict[str, Any]] = field(default_factory=list)  # installed managed packages
     schema: SchemaSnapshot | None = None
     data_profile: DataProfile | None = None
 
@@ -69,12 +70,14 @@ class ToolingSupplement:
 
         deps = tree.tooling_json("dependencies") or []
         cron = tree.tooling_json("cron_triggers") or []
+        packages = tree.tooling_json("packages") or []
         dump = tree.tooling_json("data_profile")
         return cls(
             cmt_records=read_cmt_records_from_fixture(tree.root)
             + read_cmt_records_from_source(tree.roots),
             dependency_rows=[r for r in deps if isinstance(r, dict)],
             cron_rows=[r for r in cron if isinstance(r, dict)],
+            packages=[r for r in packages if isinstance(r, dict)],
             schema=from_source_tree(tree, org_alias=org_alias),
             data_profile=profile_from_dump(dump, org_alias=org_alias) if dump else None,
         )
@@ -167,7 +170,21 @@ class ExtractOrchestrator:
             for c in components
             if c.category is CategoryName.APEX_CLASS and c.api_name is not None
         }
-        cmt_records = self.supplement.cmt_records
+        cmt_records = list(self.supplement.cmt_records)
+        # Handler tables built in Apex (TDTM_DefaultConfig: ``new Trigger_Handler__c(
+        # Class__c=..., Object__c=...)``) dispatch exactly like custom-metadata rows.
+        for c in components:
+            if c.category is not CategoryName.APEX_CLASS or not isinstance(c.raw, dict):
+                continue
+            for i, row in enumerate(c.raw.get("dispatch_rows") or []):
+                fields = {k: str(v) for k, v in row.items() if k != "sobject"}
+                cmt_records.append(
+                    CMTRecord(
+                        cmt_type=str(row.get("sobject", "Trigger_Handler__c")),
+                        developer_name=f"{c.api_name}.{i + 1}",
+                        fields={**fields, "Defined_In__c": str(c.api_name)},
+                    )
+                )
         cmt_types_present = {r.cmt_type for r in cmt_records}
         framework_signals: list[FrameworkSignal] = detect_frameworks(
             apex_class_names, cmt_types_present
@@ -208,6 +225,7 @@ class ExtractOrchestrator:
             schema=self.supplement.schema,
             dependency_rows=list(self.supplement.dependency_rows),
             cron_rows=list(self.supplement.cron_rows),
+            packages=list(self.supplement.packages),
             data_profile=self.supplement.data_profile,
         )
 
@@ -232,6 +250,7 @@ class ExtractRunResult:
     schema: SchemaSnapshot | None = None
     dependency_rows: list[dict[str, Any]] = field(default_factory=list)
     cron_rows: list[dict[str, Any]] = field(default_factory=list)
+    packages: list[dict[str, Any]] = field(default_factory=list)
     data_profile: DataProfile | None = None
     _graph: DependencyGraph | None = field(default=None, repr=False)
 
@@ -260,6 +279,9 @@ class ExtractRunResult:
                 sort_keys=True,
             ),
             encoding="utf-8",
+        )
+        (out_dir / "packages.json").write_text(
+            json.dumps(self.packages, indent=2, sort_keys=True), encoding="utf-8"
         )
         (out_dir / "failures.json").write_text(
             json.dumps([asdict(f) for f in self.failures], indent=2, default=str),
@@ -303,6 +325,13 @@ class ExtractRunResult:
                 sort_keys=True,
                 default=str,
             ),
+            encoding="utf-8",
+        )
+        from offramp.understand.health import run_health_checks
+
+        findings = run_health_checks(self.components, processes, self.schema)
+        (out_dir / "health.json").write_text(
+            json.dumps([f.to_jsonable() for f in findings], indent=2, sort_keys=True),
             encoding="utf-8",
         )
         graph = self.build_graph()

@@ -408,7 +408,8 @@ class ToolingApiPullClient:
 
     async def _apex_classes(self) -> list[RawMetadataRecord]:
         rows = await self._tq(
-            "SELECT Id, Name, NamespacePrefix, ApiVersion, Status, Body, LengthWithoutComments FROM ApexClass"
+            "SELECT Id, Name, NamespacePrefix, ApiVersion, Status, Body, LengthWithoutComments, IsValid "
+            "FROM ApexClass"
         )
         out = []
         for r in rows:
@@ -429,9 +430,36 @@ class ToolingApiPullClient:
                         "body": body if body != "(hidden)" else "",
                         "managed_hidden": body == "(hidden)",
                         "tooling_id": r.get("Id"),
+                        "length_without_comments": r.get("LengthWithoutComments"),
+                        "is_valid": r.get("IsValid"),
                     },
                     namespace=r.get("NamespacePrefix"),
                 )
+            )
+        return out
+
+    async def installed_packages(self) -> list[dict[str, Any]]:
+        """Installed managed packages: the only identity a hidden managed class has."""
+        rows = await self._tq(
+            "SELECT Id, SubscriberPackage.Name, SubscriberPackage.NamespacePrefix, "
+            "SubscriberPackageVersion.Name, SubscriberPackageVersion.MajorVersion, "
+            "SubscriberPackageVersion.MinorVersion, SubscriberPackageVersion.PatchVersion "
+            "FROM InstalledSubscriberPackage"
+        )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            pkg = r.get("SubscriberPackage") or {}
+            ver = r.get("SubscriberPackageVersion") or {}
+            out.append(
+                {
+                    "namespace": pkg.get("NamespacePrefix"),
+                    "name": pkg.get("Name"),
+                    "version": ver.get("Name"),
+                    "version_number": ".".join(
+                        str(ver.get(k) or 0)
+                        for k in ("MajorVersion", "MinorVersion", "PatchVersion")
+                    ),
+                }
             )
         return out
 

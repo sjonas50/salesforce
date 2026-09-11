@@ -49,6 +49,12 @@ def add_verify_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
         "--recipes", type=Path, help='JSON: {"FlowName": {"object","create","update","inputs"}}'
     )
     p.add_argument(
+        "--auto-recipes",
+        action="store_true",
+        help="Generate recipes from the schema and entry conditions for flows that have none "
+        "(see `offramp recipes`); hand-written --recipes entries win.",
+    )
+    p.add_argument(
         "--roundtrip",
         action="store_true",
         help="Also render each definition back to Flow XML, deploy it as <Name>_rt, and require "
@@ -110,14 +116,34 @@ def _print(results: list[VerificationResult], as_json: bool) -> None:
     )
 
 
+def _load_recipes(args: argparse.Namespace) -> dict[str, Any]:
+    """Hand-written recipes, plus generated ones for the rest with ``--auto-recipes``."""
+    recipes: dict[str, Any] = {}
+    if args.recipes:
+        recipes = {
+            k: v
+            for k, v in json.loads(args.recipes.read_text(encoding="utf-8")).items()
+            if not k.startswith("_")
+        }
+    if getattr(args, "auto_recipes", False):
+        from offramp.cli.health import load_extract
+        from offramp.verify.recipes import generate_recipes
+
+        _, defs, schema = load_extract(args.extract_dir)
+        recipes = generate_recipes(defs, schema, existing=recipes, only=args.flow or None)
+        for name, r in recipes.items():
+            if r.get("_generated") and r.get("_needs"):
+                log.warning("cli.verify.recipe_incomplete", flow=name, needs=r["_needs"])
+    return recipes
+
+
 def _run(args: argparse.Namespace) -> int:
+    recipes = _load_recipes(args)
     recipes_names: list[str] = []
-    if args.recipes and not args.flow:
+    if recipes and not args.flow:
         # Recipes name the flows to verify; everything else in the org (including
         # Salesforce-shipped flows) is out of scope, never invoked, never copied.
-        recipes_names = [
-            k for k in json.loads(args.recipes.read_text(encoding="utf-8")) if not k.startswith("_")
-        ]
+        recipes_names = list(recipes)
     processes = load_processes(args.extract_dir, args.flow or recipes_names)
     if not processes:
         log.error("cli.verify.no_flows", extract_dir=str(args.extract_dir))
@@ -126,13 +152,13 @@ def _run(args: argparse.Namespace) -> int:
         traces = parse_debug_log(args.log.read_text(encoding="utf-8"))
         results = [verify_process(p, find_trace(p, traces)) for p in processes]
     else:
-        results = asyncio.run(_run_org(args, processes))
+        results = asyncio.run(_run_org(args, processes, recipes))
     _print(results, args.json)
     return 0 if all(r.status != "mismatch" for r in results) else 1  # runtime errors are the org's
 
 
 async def _run_org(
-    args: argparse.Namespace, processes: list[ProcessDefinition]
+    args: argparse.Namespace, processes: list[ProcessDefinition], recipes: dict[str, Any]
 ) -> list[VerificationResult]:
     from offramp.core.config import get_settings
     from offramp.engram.client import InMemoryEngramClient
@@ -147,7 +173,6 @@ async def _run_org(
         settings=settings.salesforce.model_copy(update=updates), process_id="verify", quota=None
     )
     gateway = MCPGateway(backend=backend, engram=InMemoryEngramClient())
-    recipes = json.loads(args.recipes.read_text(encoding="utf-8")) if args.recipes else {}
     try:
         username = args.username or getattr(settings.salesforce, "username", None)
         if not username:

@@ -64,6 +64,8 @@
     {% if has_data_profile %}<div class="tile"><b>{{ summary.empty_custom_fields }}</b><span>never populated</span></div>{% endif %}
     <div class="tile"><b>{{ summary.dynamic_apex_classes }}</b><span>classes with dynamic access</span></div>
     <div class="tile"><b>{{ summary.legacy_active }}</b><span>active legacy automations</span></div>
+    <div class="tile"><b>{{ health_counts.errors }} / {{ health_counts.warnings }}</b><span>health errors / warnings</span></div>
+    {% if annotation_stats.count %}<div class="tile"><b>{{ "%.2f"|format(annotation_stats.mean_confidence) }}</b><span>annotation confidence ({{ annotation_stats.needs_review }} to review)</span></div>{% endif %}
     <div class="tile"><b>{{ orphan_total - orphan_resolved }}</b><span>likely dead classes</span></div>
     <div class="tile"><b>{{ summary.api_matched }} / {{ summary.api_only }}</b><span>API corroborated / API-only</span></div>
     <div class="tile"><b>{{ summary.unresolved_references }}</b><span>unresolved references</span></div>
@@ -110,6 +112,18 @@
 </table></div>
 </div>
 <div>
+<h2>Health checks</h2>
+<p class="lede">Static rules over the process model, the code analysis and the schema: values a picklist does not have, callouts inside a save, owner alerts after queue assignment, same-record updates after save, trigger order, missing fault paths.</p>
+<div class="tablewrap"><table>
+  <tr><th>Severity</th><th>Check</th><th>Automation</th><th>Finding</th></tr>
+  {% for h in health %}
+  <tr><td><span class="flag {% if h.severity == 'error' %}bad{% elif h.severity == 'warning' %}warn{% else %}dim{% endif %}">{{ h.severity }}</span></td>
+      <td>{{ h.code | replace('_',' ') }}</td><td><b>{{ h.component }}</b>{% if h.object %} <span class="flag dim">{{ h.object }}</span>{% endif %}</td>
+      <td>{{ h.message }}</td></tr>
+  {% else %}<tr><td colspan="4">No findings.</td></tr>{% endfor %}
+</table></div>
+</div>
+<div>
 <h2>Legacy automation</h2>
 <p class="lede">Workflow Rules and Process Builders (end of support 2025-12-31). Downstream counts components affected through the fields they write.</p>
 <div class="tablewrap"><table>
@@ -129,10 +143,11 @@
 
 <h2>Business processes</h2>
 <div class="tablewrap"><table>
-  <tr><th>ID</th><th>Cluster</th><th>Objects</th><th>Components</th><th>Mix</th></tr>
+  <tr><th>ID</th><th>Process</th><th>Objects</th><th>Components</th><th>Mix</th><th>What it does</th></tr>
   {% for p in processes %}
-  <tr><td class="num">{{ p.process_id }}</td><td><b>{{ p.label }}</b></td><td>{{ p.objects | join(', ') }}</td><td class="num">{{ p.size }}</td>
-      <td>{% for c, n in p.categories.items() %}<span class="flag dim">{{ c | replace('_',' ') }} × {{ n }}</span> {% endfor %}</td></tr>
+  <tr><td class="num">{{ p.process_id }}</td><td><b>{{ p.annotation.name if p.annotation else p.label }}</b>{% if p.annotation %} <span class="flag dim">{{ p.annotation.domain }}</span> <span class="flag dim" title="confidence">{{ "%.2f"|format(p.annotation.confidence) }}</span>{% endif %}</td><td>{{ p.objects | join(', ') }}</td><td class="num">{{ p.size }}</td>
+      <td>{% for c, n in p.categories.items() %}<span class="flag dim">{{ c | replace('_',' ') }} × {{ n }}</span> {% endfor %}</td>
+      <td>{% if p.annotation %}{{ p.annotation.narrative }}{% if p.annotation.risks %}<br><b>Risks:</b> {{ p.annotation.risks | join('; ') }}{% endif %}{% endif %}</td></tr>
   {% endfor %}
 </table></div>
 
@@ -146,7 +161,7 @@
       <td class="num">{{ row.inbound }}</td><td class="num">{{ row.outbound }}</td><td class="num">{{ row.api_corroborated }}</td>
       <td>{% if row.translation_difficulty is not none %}<span class="flag {{ row.diff_class }}">{{ row.translation_difficulty }}</span>{% endif %}</td>
       <td>{% if row.migration_risk is not none %}<span class="flag {{ row.risk_class }}">{{ row.migration_risk }}</span>{% endif %}</td>
-      <td>{{ row.summary }}</td></tr>
+      <td>{% if row.narrative or row.evidence %}<details><summary>{{ row.summary }}</summary><p>{{ row.narrative }}</p>{% if row.evidence %}<p><b>Evidence:</b> {{ row.evidence | join(' · ') }}</p>{% endif %}{% if row.unknowns %}<p><b>Unknowns:</b> {{ row.unknowns | join(' · ') }}</p>{% endif %}</details>{% else %}{{ row.summary }}{% endif %}{% if row.tier %} <span class="flag dim">{{ row.domain }}</span> <span class="flag {% if row.tier == 'tier1_rules' %}ok{% elif row.tier == 'tier2_temporal' %}warn{% else %}bad{% endif %}">{{ row.tier | replace('_',' ') }}</span>{% if row.annotation_confidence is not none %} <span class="flag {% if row.annotation_confidence >= 0.8 %}ok{% elif row.annotation_confidence >= 0.6 %}dim{% else %}warn{% endif %}" title="annotation confidence">{{ "%.2f"|format(row.annotation_confidence) }}</span>{% endif %}{% if row.needs_review %} <span class="flag bad">review</span>{% endif %}{% endif %}</td></tr>
   {% endfor %}
 </table></div>
 

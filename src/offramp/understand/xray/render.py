@@ -20,11 +20,13 @@ from offramp.core.models import CategoryName, Component, SchemaSnapshot
 from offramp.extract.audit import CoverageReport
 from offramp.extract.ooe_audit.audit import SurfaceAuditReport
 from offramp.understand import impact
-from offramp.understand.annotate import Annotation
+from offramp.understand.annotate import Annotation, ProcessAnnotation
 from offramp.understand.clustering import BusinessProcess
 from offramp.understand.complexity import ComplexityScore
 from offramp.understand.dependencies import DependencyGraph
+from offramp.understand.health import run_health_checks
 from offramp.understand.orphan.resolver import ResolutionReport
+from offramp.understand.process_ir import build_processes
 
 log = get_logger(__name__)
 
@@ -53,6 +55,7 @@ class XRayInputs:
     orphans: ResolutionReport
     complexity: dict[str, ComplexityScore] = field(default_factory=dict)
     annotations: list[Annotation] = field(default_factory=list)
+    process_annotations: list[ProcessAnnotation] = field(default_factory=list)
     schema: SchemaSnapshot | None = None
     save_impact_objects: list[str] = field(default_factory=list)
     partial_categories: list[str] = field(default_factory=list)
@@ -132,6 +135,13 @@ def _component_rows(inputs: XRayInputs) -> list[dict[str, Any]]:
                 "risk_class": _band(score.migration_risk) if score else "",
                 "summary": a.summary if a else "",
                 "domain": a.domain if a else "",
+                "tier": a.recommended_tier if a else "",
+                "annotation_confidence": a.confidence if a else None,
+                "needs_review": bool(a.needs_review) if a else False,
+                "narrative": a.narrative if a else "",
+                "evidence": list(a.evidence) if a else [],
+                "unknowns": list(a.unknowns) if a else [],
+                "deterministic": bool(a.deterministic) if a else False,
                 "partial": bool(c.raw.get("partial")) if isinstance(c.raw, dict) else False,
                 "legacy": c.category.value in _LEGACY_CATEGORIES,
                 "is_test": bool(n.meta.get("is_test")) if n else False,
@@ -215,11 +225,31 @@ def _where_used_index(g: DependencyGraph) -> list[dict[str, Any]]:
     return out
 
 
+def _annotation_stats(annotations: list[Annotation]) -> dict[str, Any]:
+    if not annotations:
+        return {"count": 0}
+    confs = [a.confidence for a in annotations]
+    return {
+        "count": len(annotations),
+        "mean_confidence": round(sum(confs) / len(confs), 2),
+        "below_0_6": sum(1 for c in confs if c < 0.6),
+        "needs_review": sum(1 for a in annotations if a.needs_review),
+        "deterministic": sum(1 for a in annotations if a.deterministic),
+        "tiers": {
+            t: sum(1 for a in annotations if a.recommended_tier == t)
+            for t in ("tier1_rules", "tier2_temporal", "tier3_langgraph")
+        },
+    }
+
+
 def build_context(inputs: XRayInputs) -> dict[str, Any]:
     g = inputs.graph
+    pann = {a.process_id: a for a in inputs.process_annotations}
     summary = impact.summarize(g, inputs.schema, inputs.components)
     unused = impact.unused_fields(g)
     legacy = impact.legacy_automation(g, inputs.components)
+    definitions = build_processes(inputs.components, org_alias=inputs.org_alias)
+    health = run_health_checks(inputs.components, definitions, inputs.schema)
     objects = inputs.save_impact_objects or _default_save_objects(g)
     save_impacts = []
     for obj in objects:
@@ -297,6 +327,11 @@ def build_context(inputs: XRayInputs) -> dict[str, Any]:
         "has_data_profile": any(
             "fill_rate" in n.meta for n in g.nodes.values() if n.kind == "field"
         ),
+        "health": [f.to_jsonable() for f in health],
+        "health_counts": {
+            "errors": sum(1 for f in health if f.severity == "error"),
+            "warnings": sum(1 for f in health if f.severity == "warning"),
+        },
         "legacy": [
             {
                 "name": la.component.api_name,
@@ -314,9 +349,13 @@ def build_context(inputs: XRayInputs) -> dict[str, Any]:
                 "size": p.size,
                 "objects": p.object_names,
                 "categories": p.categories,
+                "annotation": (
+                    pann[p.process_id].model_dump(mode="json") if p.process_id in pann else None
+                ),
             }
             for p in inputs.processes
         ],
+        "annotation_stats": _annotation_stats(inputs.annotations),
         "orphan_resolutions": [
             {
                 "apex_class_name": r.apex_class_name,
@@ -399,6 +438,8 @@ def render_json(inputs: XRayInputs, ctx: dict[str, Any] | None = None) -> dict[s
         "save_impacts": ctx["save_impacts"],
         "unused_fields": ctx["unused_fields"],
         "legacy_automation": ctx["legacy"],
+        "health": ctx["health"],
+        "annotation_stats": ctx["annotation_stats"],
         "orphan_resolutions": {
             "resolved": ctx["orphan_resolutions"],
             "unresolved": ctx["unresolved_orphans"],

@@ -153,3 +153,27 @@ def criteria_fields(items: list[dict[str, str]]) -> list[str]:
             if f:
                 out.append(f)
     return sorted(set(out))
+
+
+_SOURCE_SUFFIXES = (".js", ".html", ".cmp", ".app", ".evt", ".intf", ".design", ".css")
+_SOURCE_BUDGET = 24_000
+
+
+def keep_sources(files: dict[str, str], budget: int = _SOURCE_BUDGET) -> dict[str, str]:
+    """Bundle sources worth reading later (annotation), largest files truncated to a budget."""
+    out: dict[str, str] = {}
+    remaining = budget
+    for name in sorted(files, key=lambda n: (not n.endswith(".js"), not n.endswith(".html"), n)):
+        if not name.endswith(_SOURCE_SUFFIXES) or name.endswith(".css"):
+            continue
+        text = files[name]
+        if remaining <= 0:
+            out[name] = f"[omitted: {len(text)} chars, bundle source budget exhausted]"
+            continue
+        if len(text) > remaining:
+            out[name] = text[:remaining] + f"\n[... truncated {len(text) - remaining} chars]"
+            remaining = 0
+        else:
+            out[name] = text
+            remaining -= len(text)
+    return out

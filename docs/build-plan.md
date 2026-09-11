@@ -43,7 +43,7 @@ Non-goals for the twelve-month window: generating replacement code, shadow execu
 | AD-28 | **Own parsers, API as cross-check.** Every dependency edge is produced by our extractors. `MetadataComponentDependency` rows are ingested as a second opinion that raises confidence where they agree and are surfaced as "API-only" edges where they do not. | The API is beta, capped, unfilterable by name, and omits reports. Vendors that lean on it (Elements, Panaya) inherit its gaps. |
 | AD-29 | **Two extraction paths, REST first.** Tooling/REST via the MCP gateway is the primary path (no CLI dependency on the customer side). sf CLI retrieve is the secondary path for customers who supply an SFDX project or want a full metadata ZIP. Both feed C19. | Sweep-style SaaS onboarding is an OAuth connect, not a CLI install. |
 | AD-30 | **Per-edge provenance is a product feature.** Engram anchoring already records it; the X-Ray report exposes evidence channel and confidence to the customer. | "Shows its work" is the positioning against Sweep's black box. |
-| AD-31 | **No summit-ast.** The tokenizer in C20 is the year-one Apex analyzer; a grammar-backed parser (apex-parser via JVM, or tree-sitter-sfapex) is a year-two upgrade behind the same `ApexAnalysis` contract. | summit-ast is archived; a JVM/Bazel toolchain in a Python product is a cost we do not need to pay to ship year one. |
+| AD-31 | **No summit-ast.** Apex analysis sits behind the `ApexAnalysis` contract with two engines: Salesforce's ANTLR grammar through the Node package `@apexdevtools/apex-parser` (default since 2026-09-11, no JVM) and the own tokenizer as the fallback when Node is absent or a file does not parse. | summit-ast is archived; the Node grammar package costs one `npm ci` and parses NPSP in nine seconds, so the year-two swap was pulled forward once the tokenizer's false edges were measured on real corpora. |
 
 ## Phases
 
@@ -153,7 +153,33 @@ Three layers, added in the order a customer would ask for them:
 
 **Toward a pilot (2026-09-10):** D.6 is done; annotations are the last untested stage (never run: no `LLM_API_KEY`). Second sample org chosen: the free **Financial Services Cloud Developer Edition** ("FSC playground", developer.salesforce.com/promotions/orgs/fscplayground) — a real financial-institution org with the managed package, sample data and its flows; managed Apex bodies are hidden, so it also exercises the references-only path at scale.
 
-Next for validation: a static check for the after-save-flow → callout-Apex hazard; recipes generated from the schema (required fields) instead of hand-written; verifying the Easy Spaces flows (screen flows need a user).
+## Big real corpora (2026-09-10)
+
+Instead of a financial-services org (the FSC Developer Edition signup rejects an email that already owns a Developer Edition), the four largest open-source Salesforce codebases were scanned from source, no API calls: **NPSP** (Nonprofit Success Pack: 1,044 classes, 26 triggers, TDTM framework, 193 CMT records, 765 fields, 157 UI bundles), **EDA** (625 classes, 37 triggers), **PMM**, and **apex-recipes**. Results after the fixes they drove:
+
+| Corpus | Components | Edges (tokenizer → grammar) | Unresolved refs: start → tokenizer fixes → grammar engine | Dispatch edges |
+|---|---|---|---|---|
+| NPSP | 1,334 (was 1,113) | 25,543 → 24,617 | 2,743 → 431 → **13** (5 packages recorded as dependencies) | 88 |
+| EDA | 814 (was 695) | 8,399 → 7,881 | 569 → 135 → **0** | 90 |
+| PMM | 230 | 3,160 → 3,097 | 233 → 13 → **7** (all report columns) | — |
+| apex-recipes | 174 (was 35) | 1,018 → 1,031 | 93 → 22 → **0** | — |
+
+The grammar engine (AD-31 delivered early: Salesforce's ANTLR grammar through `tools/apex-parser`, see CLAUDE.md pitfall 32) removed about 2,300 NPSP edges the tokenizer had invented — field names read as objects (`Amount__c`, `Primary_Contact__c`), member accesses on lowercase variables read as standard objects (`address.…`), case-insensitive class candidates that matched the wrong class (`contactService` → `ContactService` when the variable is a `BDI_ContactService`) — and added about 1,200 real ones (`System.Label.X`, `Trigger.new` typing, `insert new X(...)`, `map.get(k).Field`). NPSP's remaining 13 are `Task.Engagement_Plan__c` (a field the corpus really does not define) and four one-off platform types.
+
+What they fixed: SFDX package-directory semantics in the source reader (pitfall 26), installed-package fields as dependencies, platform types and constants, standard objects as types, and Apex-defined trigger tables (pitfall 31). NPSP scans in about six seconds. Next: the FSC org once signed up with a second email; deploying PMM to the Developer Edition to run `offramp verify` on its flows; the remaining unresolved classes at scale (inner types through inheritance, lowercase variables read as objects).
+
+Done 2026-09-11: `offramp health` (six static rules incl. the after-save-flow → callout-Apex hazard and picklist values that do not exist — it immediately caught the fixture's NightlyHousekeeping filtering on `Status = 'Dead'`) and `offramp recipes` / `verify --auto-recipes` (recipes synthesised from required fields, entry conditions, validation-rule `ISBLANK` terms and sibling-flow silencing; both Developer Edition flows verified on generated recipes alone). Still open: verifying the Easy Spaces flows (screen flows need a user).
+
+## Annotations (2026-09-11)
+
+The LLM pass runs on every X-Ray scan (`LLM_API_KEY`; workspace-scoped key or `LLM_WORKSPACE_ID`). Two versions were run on the Developer Edition the same day:
+
+| Pass | Input to the model | Mean confidence | Below 0.6 | Notes |
+|---|---|---|---|---|
+| v1 | 4,000-char slice of raw metadata | 0.75 | 43 at ≤ 0.6 | low scores = sharing-rule config dumps, bundles without source, managed code, truncated prompts |
+| v2 | dossier: facts + process model + neighbourhood + source; evidence + unknowns required; deterministic tier hint; earned confidence | 0.92 (model-annotated rows 0.74 under the caps) | 11 | 216 empty sharing rules answered by rule at 1.0; managed code/bundles described from outside and capped at 0.5; 7 business-process narratives with risks |
+
+The remaining low scores are honest: hidden managed-package code and bundles (unknowns listed), and components whose only visible caller is a page. Next for confidence: a review sample (accept/reject per annotation) to calibrate the caps against people, and verify results cited as facts on every flow (`offramp annotate --verify-results`).
 
 ## Known limitations (tracked, not yet scheduled)
 
@@ -162,7 +188,7 @@ Next for validation: a static check for the after-save-flow → callout-Apex haz
 
 - The Flow component on Lightning pages (`flowruntime:flowRuntimeForFlexipage`) could not be deployed through the Metadata API in any region or template we tried, so the real-org fixture page carries fields and an LWC only; the page→flow edge is covered by an inline unit test. Build one page in App Builder, retrieve it, and diff to close this.
 - The fixture org is single-user and small: fill rates and record counts are exercised but not representative, and reports shipped by Salesforce are not describable by the API.
-- Apex analysis is tokenizer-based: class properties are not typed, `is_sobject_name` uses a fixed standard-object list plus suffix rules, and inner-class references (`Outer.Inner`) resolve only when the outer class is in the corpus. A grammar-backed parser (AD-31) is the fix.
+- Apex analysis without Node falls back to the tokenizer (class properties untyped, fields mistaken for objects, case-insensitive class candidates). With the grammar engine the remaining gaps are relationship hops on typed variables (`con.Account.Name` records `Contact.Account` only), `is_sobject_name` still a fixed standard-object list plus suffix rules for names the schema snapshot lacks, and dotted `Outer.Inner` references that resolve to the outer class only.
 - `MetadataComponentDependency` rows with no parser evidence become `dependency_api` edges at 0.6 confidence so the report can show them; they are excluded from "live automation" counts but do appear in totals.
 - The Tooling path reads reports through the Analytics describe endpoint, capped at the 300 most recently run; the Metadata API path has no cap.
 - Aggregate `COUNT(field)` is not allowed on long text, rich text, encrypted, multi-select, and compound fields, so those fields have no fill rate.

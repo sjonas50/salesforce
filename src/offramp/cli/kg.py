@@ -26,7 +26,12 @@ from offramp.understand.process_ir import build_processes
 
 log = get_logger(__name__)
 
-DEFAULT_LIBRARY = Path(os.environ.get("OFFRAMP_LIBRARY", str(Path.home() / ".offramp" / "library")))
+
+def default_library() -> Path:
+    """``$OFFRAMP_LIBRARY`` (also from ``.env``, loaded by the CLI) or ``~/.offramp/library``."""
+    return Path(
+        os.environ.get("OFFRAMP_LIBRARY", str(Path.home() / ".offramp" / "library"))
+    ).expanduser()
 
 
 def add_kg_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -34,8 +39,8 @@ def add_kg_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     p.add_argument(
         "--library",
         type=Path,
-        default=DEFAULT_LIBRARY,
-        help=f"Library directory (default {DEFAULT_LIBRARY}).",
+        default=default_library(),
+        help=f"Library directory (default {default_library()}).",
     )
     ops = p.add_subparsers(dest="kg_command", required=True)
 

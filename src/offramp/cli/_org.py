@@ -168,6 +168,7 @@ async def connect(args: argparse.Namespace, engram: EngramClient) -> ConnectedSo
         if not args.no_dependency_api:
             supplement.dependency_rows = await tooling.dependency_rows()
         supplement.cron_rows = await tooling.cron_rows()
+        supplement.packages = await tooling.installed_packages()
         if not args.no_schema:
             supplement.schema = await tooling.schema()
         if not args.no_data_profile and supplement.schema is not None:

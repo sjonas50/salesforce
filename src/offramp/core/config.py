@@ -48,7 +48,7 @@ class InfraSettings(BaseSettings):
 class LLMSettings(BaseSettings):
     """LLM endpoint config for annotation + Tier 3 agents.
 
-    Defaults to Anthropic Claude Sonnet 4.6. To use a self-hosted Llama or
+    Defaults to Anthropic Claude Sonnet 5. To use a self-hosted Llama or
     another OpenAI-compatible endpoint, override ``base_url`` + ``model``;
     the annotation harness routes by ``base_url`` host.
     """
@@ -57,6 +57,9 @@ class LLMSettings(BaseSettings):
 
     base_url: str = "https://api.anthropic.com"
     api_key: SecretStr = SecretStr("")
+    # Keys created at the organization level (not scoped to one workspace) must name the
+    # workspace on every request: Console → Settings → Workspaces → ID (wrkspc_…).
+    workspace_id: str = ""
     model: str = "claude-sonnet-5"
     max_tokens: int = 1024
     requests_per_minute: int = 50
